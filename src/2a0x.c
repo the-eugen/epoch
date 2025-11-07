@@ -63,7 +63,7 @@ struct mos6502_cpu;
 struct mos6502_pa_range;
 
 typedef void(*mos6502_mmio_handler)(struct mos6502_cpu* cpu,
-                                    struct mos6502_pa_range* range,
+                                    const struct mos6502_pa_range* range,
                                     bool rw,
                                     mos_pa_t offset,
                                     mos_word_t* pdata);
@@ -160,7 +160,7 @@ static const struct mos6502_instr mos_opcodes[] =
 
     MOS_OP(0xa9, LDA, MOS_AM_IMM,  2, MOS_UOP_LDA),
     MOS_OP(0xa5, LDA, MOS_AM_Z,    3, MOS_UOP_LDA),
-    MOS_OP(0xb5, LDA, MOS_AM_ZX,   3, MOS_UOP_LDA),
+    MOS_OP(0xb5, LDA, MOS_AM_ZX,   4, MOS_UOP_LDA),
     MOS_OP(0xad, LDA, MOS_AM_ABS,  4, MOS_UOP_LDA),
     MOS_OP(0xbd, LDA, MOS_AM_ABSX, 4, MOS_UOP_LDA),
     MOS_OP(0xb9, LDA, MOS_AM_ABSY, 4, MOS_UOP_LDA),
@@ -180,7 +180,7 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0xbc, LDY, MOS_AM_ABSX, 4, MOS_UOP_LDY),
 };
 
-static mos_word_t load_word(struct mos6502_cpu* cpu, mos_pa_t pa)
+static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
 {
     /* TODO: this can be a binary search, but the amount of regions is small enough for now */
     for (size_t i = 0; i < cpu->nregions; i++) {
@@ -235,9 +235,17 @@ static bool addr_mode_exec(struct mos6502_cpu* cpu)
         latch_address(cpu, load_word(cpu, cpu->PC++));
         break;
     case MOS_AM_ZX:
-        /* Wrap around on overflow */
-        ep_verify(cpu->instr.cycle == 0);
-        latch_address(cpu, (load_word(cpu, cpu->PC++) + cpu->X) & 0xFF);
+        switch (cpu->instr.cycle) {
+        case 0:
+            cpu->DB = load_word(cpu, cpu->PC++);
+            break;
+        case 1:
+            /* Wrap around on overflow */
+            latch_address(cpu, (cpu->DB + cpu->X) & 0xFF);
+            break;
+        default:
+            ep_verify(false);
+        }
         break;
     case MOS_AM_ZY:
         /* Wrap around on overflow */
@@ -412,6 +420,7 @@ void mos6502_reset(struct mos6502_cpu* cpu)
 {
     ep_verify(cpu != NULL);
 
+    /* A, X, Y survive reset */
     cpu->PC = (mos_pa_t)(load_word(cpu, 0xfffd) << 8) | load_word(cpu, 0xfffc);
     cpu->S = 0xfd;
     cpu->P = SR_I | SR_U;
@@ -439,6 +448,12 @@ void mos6502_map_ram_region(struct mos6502_cpu* cpu, mos_pa_t base, size_t size,
     };
 
     insert_pa_range(cpu, &range);
+}
+
+mos_word_t mos6502_load_word(struct mos6502_cpu* cpu, mos_pa_t addr)
+{
+    ep_verify(cpu);
+    return load_word(cpu, addr);
 }
 
 bool mos6502_tick(struct mos6502_cpu* cpu)
@@ -532,48 +547,62 @@ ep_test(test_reset)
     free_ram_region(ram);
 }
 
-static uint64_t run_opcodes(struct mos6502_cpu* cpu, const mos_word_t* opcodes, size_t nopcodes)
+struct test_ram_segment
+{
+    mos_pa_t offset;
+    mos_pa_t size;
+    const mos_word_t* data;
+};
+
+#define MAKE_TEST_SEGMENT(_offset_, ...) \
+    { (_offset_), sizeof((const mos_word_t[]){ __VA_ARGS__ }), (const mos_word_t[]){ __VA_ARGS__ } }
+
+/* This version allows specifying data as {a, b} vector */
+#define MAKE_TEST_SEGMENT_VEC(_offset_, ...) \
+    { (_offset_), sizeof((const mos_word_t[]) __VA_ARGS__ ), (const mos_word_t[]) __VA_ARGS__ }
+
+static void init_test_cpu(struct mos6502_cpu* cpu, const struct test_ram_segment* segments, size_t nsegments)
 {
     mos_word_t* ram = alloc_ram_region();
 
     /* Setup the reset vector and opcodes */
+    for (size_t i = 0; i < nsegments; i++) {
+        memcpy(ram + segments[i].offset, segments[i].data, segments[i].size);
+    }
     ram[0xFFFC] = 0x00;
     ram[0xFFFD] = 0x00;
-    memcpy(ram, opcodes, nopcodes);
 
     mos6502_init(cpu);
     mos6502_map_ram_region(cpu, 0, 0x10000, ram);
     mos6502_reset(cpu);
+}
 
+static void free_test_cpu(struct mos6502_cpu* cpu)
+{
+    // TODO
+}
+
+static uint64_t run_test_cpu(struct mos6502_cpu* cpu)
+{
     /* We expect each test to terminate with a HLT */
     uint64_t cycles = cpu->cycle;
     while (!mos6502_is_halted(cpu)) {
         mos6502_tick(cpu);
     }
 
+    /* Subtract 1 cycle for the HLT */
     return (cpu->cycle - cycles);
 }
 
 static uint64_t run_opcode(struct mos6502_cpu* cpu, mos_word_t opcode)
 {
-    mos_word_t* ram = alloc_ram_region();
+    struct test_ram_segment seg = MAKE_TEST_SEGMENT(0, opcode);
+    init_test_cpu(cpu, &seg, 1);
 
-    /* Setup the reset vector and opcodes */
-    ram[0xFFFC] = 0x00;
-    ram[0xFFFD] = 0x00;
-    ram[0x0000] = opcode;
+    uint64_t cycles = run_test_cpu(cpu);
+    free_test_cpu(cpu);
 
-    mos6502_init(cpu);
-    mos6502_map_ram_region(cpu, 0, 0x10000, ram);
-    mos6502_reset(cpu);
-
-    /* Tick until full opcode is done */
-    uint64_t cycles = cpu->cycle;
-    while (!mos6502_tick(cpu)) {
-        ;
-    } 
-
-    return (cpu->cycle - cycles);
+    return cycles;
 }
 
 static void run_hlt_testcase(mos_word_t opcode)
@@ -604,246 +633,16 @@ ep_test(test_hlt)
 ep_test(test_nop)
 {
     struct mos6502_cpu cpu;
-    const mos_word_t code[] = { 0xea, 0x02 };
-    uint64_t cycles = run_opcodes(&cpu, code, 2);
-    ep_verify_equal(cycles, 3);
+    struct test_ram_segment segment = MAKE_TEST_SEGMENT_VEC(0x0, {0xea, 0x02});
+    init_test_cpu(&cpu, &segment, 1);
+
+    uint64_t cycles = run_test_cpu(&cpu) - 1;
+    ep_verify_equal(cycles, 2);
     ep_verify_equal(cpu.total_retired, 2);
+
+    free_test_cpu(&cpu);
 }
 
-static uint64_t run_lda_testcase(const mos_word_t* opcodes, size_t nopcodes, mos_word_t exp_acc, mos_word_t exp_flags)
-{
-    struct mos6502_cpu cpu;
-    uint64_t cycles = run_opcodes(&cpu, opcodes, nopcodes);
-
-    /* Check the expected accumulator value */
-    ep_verify_equal(cpu.A, exp_acc);
-    ep_verify_equal(cpu.P & 0x82, exp_flags & 0x82);
-
-    return cycles;
-}
-
-ep_test(test_lda_immediate)
-{
-    // LDA #42; HLT
-    const mos_word_t code[] = { 0xA9, 0x42, 0x02 };
-    run_lda_testcase(code, sizeof(code), 0x42, 0);
-}
-
-ep_test(test_lda_immediate_z)
-{
-    // LDA #00; HLT
-    const mos_word_t code[] = { 0xA9, 0x00, 0x02 };
-    run_lda_testcase(code, sizeof(code), 0x00, SR_Z);
-}
-
-ep_test(test_lda_immediate_n)
-{
-    // LDA #AA; HLT
-    const mos_word_t code[] = { 0xA9, 0xAA, 0x02 };
-    run_lda_testcase(code, sizeof(code), 0xAA, SR_N);
-}
-
-
-ep_test(test_lda_zeropage)
-{
-    // LDA $03; HLT; DATA
-    const mos_word_t code[] = { 0xA5, 0x03, 0x02, 0x42 };
-    run_lda_testcase(code, sizeof(code), 0x42, 0);
-}
-
-ep_test(test_lda_zeropage_z)
-{
-    // LDA $03; HLT; DATA
-    const mos_word_t code[] = { 0xA5, 0x03, 0x02, 0x00 };
-    run_lda_testcase(code, sizeof(code), 0x00, SR_Z);
-}
-
-ep_test(test_lda_zeropage_n)
-{
-    // LDA $03; HLT; DATA
-    const mos_word_t code[] = { 0xA5, 0x03, 0x02, 0xAA };
-    run_lda_testcase(code, sizeof(code), 0xAA, SR_N);
-}
-
-ep_test(test_lda_zeropagex)
-{
-    // LDX #03; LDA $02,X; HLT; DATA
-    const mos_word_t code[] = { 0xA2, 0x03, 0xB5, 0x02, 0x02, 0x42 };
-    run_lda_testcase(code, sizeof(code), 0x42, 0);
-}
-
-ep_test(test_lda_zeropagex_z)
-{
-    // LDX #03; LDA $02,X; HLT; DATA
-    const mos_word_t code[] = { 0xA2, 0x03, 0xB5, 0x02, 0x02, 0x00 };
-    run_lda_testcase(code, sizeof(code), 0x00, SR_Z);
-}
-
-ep_test(test_lda_zeropagex_n)
-{
-    // LDX #03; LDA $02,X; HLT; DATA
-    const mos_word_t code[] = { 0xA2, 0x03, 0xB5, 0x02, 0x02, 0xAA };
-    run_lda_testcase(code, sizeof(code), 0xAA, SR_N);
-}
-
-ep_test(test_lda_zeropagex_overflow)
-{
-    // LDX #06; LDA $FF,X; HLT; DATA
-    const mos_word_t code[] = { 0xA2, 0x06, 0xB5, 0xFF, 0x02, 0x42 };
-    run_lda_testcase(code, sizeof(code), 0x42, 0);
-}
-
-ep_test(test_lda_abs)
-{
-    // LDA $1001; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xAD,
-        [0x0001] = 0x01,
-        [0x0002] = 0x10,
-        [0x0003] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0x24,
-    };
-    run_lda_testcase(code, sizeof(code), 0x24, 0);
-}
-
-ep_test(test_lda_abs_z)
-{
-    // LDA $1001; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xAD,
-        [0x0001] = 0x01,
-        [0x0002] = 0x10,
-        [0x0003] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0x00,
-    };
-    run_lda_testcase(code, sizeof(code), 0x00, SR_Z);
-}
-
-ep_test(test_lda_abs_n)
-{
-    // LDA $1001; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xAD,
-        [0x0001] = 0x01,
-        [0x0002] = 0x10,
-        [0x0003] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0xAA,
-    };
-    run_lda_testcase(code, sizeof(code), 0xAA, SR_N);
-}
-
-ep_test(test_lda_absx)
-{
-    // LDX $01, LDA $1000,X; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xA2,
-        [0x0001] = 0x01,
-        [0x0002] = 0xBD,
-        [0x0003] = 0x00,
-        [0x0004] = 0x10,
-        [0x0005] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0x24,
-    };
-    run_lda_testcase(code, sizeof(code), 0x24, 0);
-}
-
-ep_test(test_lda_absx_z)
-{
-    // LDX $01, LDA $1000,X; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xA2,
-        [0x0001] = 0x01,
-        [0x0002] = 0xBD,
-        [0x0003] = 0x00,
-        [0x0004] = 0x10,
-        [0x0005] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0x00,
-    };
-    run_lda_testcase(code, sizeof(code), 0x00, SR_Z);
-}
-
-ep_test(test_lda_absx_n)
-{
-    // LDX $01, LDA $1000,X; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xA2,
-        [0x0001] = 0x01,
-        [0x0002] = 0xBD,
-        [0x0003] = 0x00,
-        [0x0004] = 0x10,
-        [0x0005] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0xAA,
-    };
-    run_lda_testcase(code, sizeof(code), 0xAA, SR_N);
-}
-
-ep_test(test_lda_absy)
-{
-    // LDY $01, LDA $1000,X; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xA0,
-        [0x0001] = 0x01,
-        [0x0002] = 0xB9,
-        [0x0003] = 0x00,
-        [0x0004] = 0x10,
-        [0x0005] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0x24,
-    };
-    run_lda_testcase(code, sizeof(code), 0x24, 0);
-}
-
-ep_test(test_lda_absy_z)
-{
-    // LDY $01, LDA $1000,X; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xA0,
-        [0x0001] = 0x01,
-        [0x0002] = 0xB9,
-        [0x0003] = 0x00,
-        [0x0004] = 0x10,
-        [0x0005] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0x00,
-    };
-    run_lda_testcase(code, sizeof(code), 0x00, SR_Z);
-}
-
-ep_test(test_lda_absy_n)
-{
-    // LDY $01, LDA $1000,X; HLT; data
-    const mos_word_t code[] ={
-        [0x0000] = 0xA0,
-        [0x0001] = 0x01,
-        [0x0002] = 0xB9,
-        [0x0003] = 0x00,
-        [0x0004] = 0x10,
-        [0x0005] = 0x02,
-        [0x1000] = 0x42,
-        [0x1001] = 0xAA,
-    };
-    run_lda_testcase(code, sizeof(code), 0xAA, SR_N);
-}
-
-/*
-static void test_lda_indirect_x(void)
-{
-    // LDX #2; LDA ($20,X); BRK
-    const mos_word_t code[] = { 0xA2, 0x02, 0xA1, 0x20, 0x02 };
-    run_lda_testcase(code, sizeof(code), 0x33, 0);
-}
-
-static void test_lda_indirect_y(void)
-{
-    const mos_word_t code[] = { 0xA0, 0x03, 0xB1, 0x30, 0x00 }; // LDY #3; LDA ($30),Y; BRK
-    run_lda_testcase(code, sizeof(code), 0x99, FLAG_N);
-}
-*/
+#include "6502_tests.inc"
 
 #endif

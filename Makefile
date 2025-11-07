@@ -9,6 +9,10 @@ ifneq ($(filter-out 0,$(V)),)
   Q :=
 endif
 
+srcdir := src
+objdir := obj
+toolsdir := tools
+
 CC := clang
 CFLAGS := -Wall --std=gnu11
 
@@ -24,8 +28,7 @@ ifneq ($(filter-out 0,$(CONFIG_TEST)),)
   EXTRA_DEPS += test.lds
 endif
 
-srcdir := src
-objdir := obj
+TESTGEN := $(srcdir)/6502_tests.inc
 
 all:
 
@@ -58,7 +61,7 @@ $(objdir)/epoch: $(objs) $(EXTRA_DEPS)
 
 .PHONY: clean
 clean:
-	$(Q) rm -rf $(objdir) $(CONFIG_STAMP)
+	$(Q) rm -rf $(objdir) $(TESTGEN)
 
 .PHONY: show-vars
 show-vars:
@@ -70,6 +73,13 @@ $(objdir)/%.o: $(srcdir)/%.c
 
 $(objdir)/%.o: $(srcdir)/%.cpp
 	$(Q) $(CXX) $(CXXFLAGS) -c -o $@ $<
+
+ifneq ($(filter-out 0,$(CONFIG_TEST)),)
+$(srcdir)/2a0x.c: $(srcdir)/6502_tests.inc
+endif
+
+$(srcdir)/6502_tests.inc: $(toolsdir)/gen_6502_tests.py
+	$(Q) python3 $^ > $@
 
 #
 # Dependency generation
