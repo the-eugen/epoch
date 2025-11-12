@@ -4,6 +4,8 @@
     #error "C11 or later compiler is required"
 #endif
 
+#define _X(x) x
+
 #define ep_likely(x)   __builtin_expect(!!(x), 1)
 #define ep_unlikely(x) __builtin_expect(!!(x), 0)
 #define ep_noreturn    _Noreturn

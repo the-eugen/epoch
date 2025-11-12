@@ -266,6 +266,46 @@ instructions: list[Instruction] = [
         dest        = Register.A,
         xpagestall  = True,
     ),
+    Instruction(
+        mnemonic    = 'STX',
+        modes       = {
+                        AddressModeId.Zeropage:     (0x86, 3),
+                        AddressModeId.ZeropageY:    (0x96, 4),
+                        AddressModeId.Absolute:     (0x8E, 4),
+                    },
+        templates   = load_templates,
+        values      = [0x42],
+        operands    = [Register.X],
+        dest        = 'Memory',
+    ),
+    Instruction(
+        mnemonic    = 'STY',
+        modes       = {
+                        AddressModeId.Zeropage:     (0x84, 3),
+                        AddressModeId.ZeropageX:    (0x94, 4),
+                        AddressModeId.Absolute:     (0x8C, 4),
+                    },
+        templates   = load_templates,
+        values      = [0x42],
+        operands    = [Register.Y],
+        dest        = 'Memory',
+    ),
+    Instruction(
+        mnemonic    = 'STA',
+        modes       = {
+                        AddressModeId.Zeropage:     (0x85, 3),
+                        AddressModeId.ZeropageX:    (0x95, 4),
+                        AddressModeId.Absolute:     (0x8D, 4),
+                        AddressModeId.AbsoluteX:    (0x9D, 5),
+                        AddressModeId.AbsoluteY:    (0x99, 5),
+                        AddressModeId.IndirectX:    (0x81, 6),
+                        AddressModeId.IndirectY:    (0x91, 6),
+                    },
+        templates   = load_templates,
+        values      = [0x42],
+        operands    = [Register.A],
+        dest        = 'Memory',
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
