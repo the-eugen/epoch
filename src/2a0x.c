@@ -16,18 +16,24 @@ typedef uint16_t    mos_pa_t;
 enum mos6502_uop
 {
     MOS_UOP_NOP,
+    MOS_UOP_HLT,
     MOS_UOP_LDA,
     MOS_UOP_LDX,
     MOS_UOP_LDY,
     MOS_UOP_STA,
     MOS_UOP_STX,
     MOS_UOP_STY,
-    MOS_UOP_HLT,
+    MOS_UOP_TAX,
+    MOS_UOP_TAY,
+    MOS_UOP_TSX,
+    MOS_UOP_TXA,
+    MOS_UOP_TXS,
+    MOS_UOP_TYA,
 };
 
 enum mos6502_addr_mode
 {
-    MOS_AM_IMPLIED,
+    MOS_AM_IMP,
     MOS_AM_IMM,
     MOS_AM_Z,
     MOS_AM_ZX,
@@ -105,7 +111,7 @@ struct mos6502_cpu
     #define SR_I (1u << 2)
     #define SR_Z (1u << 1)
     #define SR_C (1u << 0)
-    mos_word_t S;
+    mos_word_t SP;
     mos_word_t DB;
 
     bool halted;
@@ -139,20 +145,20 @@ struct mos6502_cpu
 
 static const struct mos6502_instr mos_opcodes[] =
 {
-    MOS_OP(0xea, NOP, MOS_AM_IMPLIED, MOS_UOP_NOP),
+    MOS_OP(0xea, NOP, MOS_AM_IMP,  MOS_UOP_NOP),
 
-    MOS_OP(0x02, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0x12, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0x22, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0x32, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0x42, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0x52, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0x62, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0x72, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0x92, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0xb2, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0xd2, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
-    MOS_OP(0xf2, HLT, MOS_AM_IMPLIED, MOS_UOP_HLT),
+    MOS_OP(0x02, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x12, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x22, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x32, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x42, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x52, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x62, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x72, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x92, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0xb2, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0xd2, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0xf2, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
 
     MOS_OP(0xa9, LDA, MOS_AM_IMM,  MOS_UOP_LDA),
     MOS_OP(0xa5, LDA, MOS_AM_Z,    MOS_UOP_LDA),
@@ -190,6 +196,13 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0x84, STY, MOS_AM_Z,    MOS_UOP_STY),
     MOS_OP(0x94, STY, MOS_AM_ZX,   MOS_UOP_STY),
     MOS_OP(0x8C, STY, MOS_AM_ABS,  MOS_UOP_STY),
+
+    MOS_OP(0xAA, TAX, MOS_AM_IMP,  MOS_UOP_TAX),
+    MOS_OP(0xA8, TAY, MOS_AM_IMP,  MOS_UOP_TAY),
+    MOS_OP(0xBA, TSX, MOS_AM_IMP,  MOS_UOP_TSX),
+    MOS_OP(0x8A, TXA, MOS_AM_IMP,  MOS_UOP_TXA),
+    MOS_OP(0x9A, TXS, MOS_AM_IMP,  MOS_UOP_TXS),
+    MOS_OP(0x98, TYA, MOS_AM_IMP,  MOS_UOP_TYA),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -250,7 +263,7 @@ static bool addr_mode_exec(struct mos6502_cpu* cpu)
     bool immediate = false;
 
     switch (cpu->instr.mode) {
-    case MOS_AM_IMPLIED:
+    case MOS_AM_IMP:
         /* Do nothing */
         ep_verify(cpu->instr.cycle == 0);
         cpu->instr.address_latched = true;
@@ -429,6 +442,24 @@ static void uop_exec(struct mos6502_cpu* cpu)
         assert(cpu->instr.address_latched);
         store_word(cpu, cpu->AB, cpu->Y);
         break;
+    case MOS_UOP_TAX:
+        MOS_STORE_REG(X, cpu->A);
+        break;
+    case MOS_UOP_TAY:
+        MOS_STORE_REG(Y, cpu->A);
+        break;
+    case MOS_UOP_TSX:
+        MOS_STORE_REG(X, cpu->SP);
+        break;
+    case MOS_UOP_TXA:
+        MOS_STORE_REG(A, cpu->X);
+        break;
+    case MOS_UOP_TXS:
+        MOS_STORE_REG(SP, cpu->X);
+        break;
+    case MOS_UOP_TYA:
+        MOS_STORE_REG(A, cpu->Y);
+        break;
     default:
         ep_verify(false);
     };
@@ -473,7 +504,7 @@ void mos6502_reset(struct mos6502_cpu* cpu)
 
     /* A, X, Y survive reset */
     cpu->PC = (mos_pa_t)(load_word(cpu, 0xfffd) << 8) | load_word(cpu, 0xfffc);
-    cpu->S = 0xfd;
+    cpu->SP = 0xfd;
     cpu->P = SR_I | SR_U;
     cpu->halted = false;
 
@@ -505,6 +536,12 @@ mos_word_t mos6502_load_word(struct mos6502_cpu* cpu, mos_pa_t addr)
 {
     ep_verify(cpu);
     return load_word(cpu, addr);
+}
+
+void mos6502_store_word(struct mos6502_cpu* cpu, mos_pa_t addr, mos_word_t val)
+{
+    ep_verify(cpu);
+    return store_word(cpu, addr, val);
 }
 
 bool mos6502_tick(struct mos6502_cpu* cpu)

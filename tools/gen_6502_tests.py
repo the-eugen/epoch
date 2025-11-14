@@ -6,17 +6,23 @@ from textwrap import dedent
 from dataclasses import dataclass, field
 from enum import Enum, IntFlag, auto
 from typing import Union, TypeAlias, Literal, Callable
+from itertools import product
 
 class StatusFlags(IntFlag):
     N = 0x80
     Z = 0x02
+    C = 0x01
+    V = 0x40
 
 class Register(Enum):
     A = "A"
     X = "X"
     Y = "Y"
+    P = "P"
+    SP = "SP"
 
 class AddressModeId(Enum):
+    Implied     = "imp"
     Immediate   = "imm"
     Zeropage    = "zpage"
     ZeropageX   = "zpagex"
@@ -38,11 +44,17 @@ class CodeTemplate:
 HLT_MARKER: byte = 0x02
 TemplateGen: TypeAlias = Callable[[int, int], list[CodeTemplate]]
 
-# Test code templates for load-type instruction
-load_templates: dict[AddressModeId, TemplateGen] = {
+# Test code templates
+templates: dict[AddressModeId, TemplateGen] = {
+    AddressModeId.Implied: lambda op, val: [
+        CodeTemplate(
+            segs    = [(0x0000, [op, HLT_MARKER])],
+        ),
+    ],
     AddressModeId.Immediate: lambda op, val: [
         CodeTemplate(
             segs    = [(0x0000, [op, val, HLT_MARKER])],
+            eaddr   = 0x0001,
         ),
     ],
     AddressModeId.Zeropage: lambda op, val: [
@@ -140,26 +152,238 @@ load_templates: dict[AddressModeId, TemplateGen] = {
     ],
 }
 
-Operand: TypeAlias = Union[Register, Literal['Memory']]
+Operand: TypeAlias = Union[Register, Literal['Memory'], Literal['Flags']]
+Semantics = Callable[dict[Operand, int], dict[Operand, int]]
+
+class TemplateDataStrat(Enum):
+    FromTestcase = auto()
+    InvertExpected = auto()
+    Nop = auto()
 
 @dataclass
 class Instruction:
     mnemonic:   str
     modes:      dict[AddressModeId, tuple[byte, int]] # mode -> (opcode, timing)
-    templates:  dict[AddressModeId, TemplateGen]
-    values:     list[bytes]
-    flags:      Optional[int] = 0
-    operands:   Optional[list[Operand]] = field(default_factory=list)
-    dest:       Optional[Operand] = None
+    testcases:  dict[Operand, [int]]
+    semantics:  Semantics
+    tdatastrat: Optional[TemplateDataStrat] = TemplateDataStrat.Nop
     xpagestall: Optional[bool] = False
 
+# Used for load-type instructions where template data value is the testcase input
+def data_value_from_testcase(tc, exp):
+    return tc["Memory"]
+
+# Used for store-type instructions where template data value is the inverse of expected to catch missing stores
+def data_value_invert_expected(tc, exp):
+    return (~exp["Memory"]) & 0xFF
+
+# Used for instructions that do not touch memory (e.g. NOP)
+def data_value_constant(tc, exp):
+    return 0
+
+instructions: list[Instruction] = [
+    Instruction(
+        mnemonic    = 'LDX',
+        modes       = {
+                        AddressModeId.Immediate:    (0xA2, 2),
+                        AddressModeId.Zeropage:     (0xA6, 3),
+                        AddressModeId.ZeropageY:    (0xB6, 4),
+                        AddressModeId.Absolute:     (0xAE, 4),
+                        AddressModeId.AbsoluteY:    (0xBE, 4),
+                      },
+        semantics   = lambda tc: {
+                        Register.X: tc['Memory'],
+                        'Flags':    (StatusFlags.Z if tc['Memory'] == 0 else 0) |
+                                    (StatusFlags.N if tc['Memory'] & 0x80 else 0)
+                      },
+        testcases   = {'Memory': [0x42, 0xAA, 0x00]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        xpagestall  = True,
+    ),
+    Instruction(
+        mnemonic    = 'LDY',
+        modes       = {
+                        AddressModeId.Immediate:    (0xA0, 2),
+                        AddressModeId.Zeropage:     (0xA4, 3),
+                        AddressModeId.ZeropageX:    (0xB4, 4),
+                        AddressModeId.Absolute:     (0xAC, 4),
+                        AddressModeId.AbsoluteX:    (0xBC, 4),
+                      },
+        semantics   = lambda tc: {
+                        Register.Y: tc['Memory'],
+                        'Flags':    (StatusFlags.Z if tc['Memory'] == 0 else 0) |
+                                    (StatusFlags.N if tc['Memory'] & 0x80 else 0)
+                      },
+        testcases   = {'Memory': [0x42, 0xAA, 0x00]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        xpagestall  = True,
+    ),
+    Instruction(
+        mnemonic    = 'LDA',
+        modes       = {
+                        AddressModeId.Immediate:    (0xA9, 2),
+                        AddressModeId.Zeropage:     (0xA5, 3),
+                        AddressModeId.ZeropageX:    (0xB5, 4),
+                        AddressModeId.Absolute:     (0xAD, 4),
+                        AddressModeId.AbsoluteX:    (0xBD, 4),
+                        AddressModeId.AbsoluteY:    (0xB9, 4),
+                        AddressModeId.IndirectX:    (0xA1, 6),
+                        AddressModeId.IndirectY:    (0xB1, 5),
+                      },
+        semantics   = lambda tc: {
+                        Register.A: tc['Memory'],
+                        'Flags':    (StatusFlags.Z if tc['Memory'] == 0 else 0) |
+                                    (StatusFlags.N if tc['Memory'] & 0x80 else 0)
+                      },
+        testcases   = {'Memory': [0x42, 0xAA, 0x00]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        xpagestall  = True,
+    ),
+    Instruction(
+        mnemonic    = 'STX',
+        modes       = {
+                        AddressModeId.Zeropage:     (0x86, 3),
+                        AddressModeId.ZeropageY:    (0x96, 4),
+                        AddressModeId.Absolute:     (0x8E, 4),
+                      },
+        semantics   = lambda tc: {
+                        'Memory': tc[Register.X],
+                        'Flags':  0
+                      },
+        testcases   = {Register.X: [0x42]},
+        tdatastrat  = TemplateDataStrat.InvertExpected,
+    ),
+    Instruction(
+        mnemonic    = 'STY',
+        modes       = {
+                        AddressModeId.Zeropage:     (0x84, 3),
+                        AddressModeId.ZeropageX:    (0x94, 4),
+                        AddressModeId.Absolute:     (0x8C, 4),
+                      },
+        semantics   = lambda tc: {
+                        'Memory': tc[Register.Y],
+                        'Flags':  0
+                      },
+        testcases   = {Register.Y: [0x42]},
+        tdatastrat  = TemplateDataStrat.InvertExpected,
+    ),
+    Instruction(
+        mnemonic    = 'STA',
+        modes       = {
+                        AddressModeId.Zeropage:     (0x85, 3),
+                        AddressModeId.ZeropageX:    (0x95, 4),
+                        AddressModeId.Absolute:     (0x8D, 4),
+                        AddressModeId.AbsoluteX:    (0x9D, 5),
+                        AddressModeId.AbsoluteY:    (0x99, 5),
+                        AddressModeId.IndirectX:    (0x81, 6),
+                        AddressModeId.IndirectY:    (0x91, 6),
+                      },
+        semantics   = lambda tc: {
+                        'Memory': tc[Register.A],
+                        'Flags':  0
+                      },
+        testcases   = {Register.A: [0x42]},
+        tdatastrat  = TemplateDataStrat.InvertExpected,
+    ),
+    Instruction(
+        mnemonic    = 'TAX',
+        modes       = {
+                        AddressModeId.Implied:      (0xAA, 2)
+                      },
+        semantics   = lambda tc: {
+                        Register.X: tc[Register.A],
+                        'Flags':    (StatusFlags.Z if tc[Register.A] == 0 else 0) |
+                                    (StatusFlags.N if tc[Register.A] & 0x80 else 0)
+                      },
+        testcases   = {Register.A: [0x00, 0xAA, 0x42]},
+    ),
+    Instruction(
+        mnemonic    = 'TAY',
+        modes       = {
+                        AddressModeId.Implied:      (0xA8, 2)
+                      },
+        semantics   = lambda tc: {
+                        Register.Y: tc[Register.A],
+                        'Flags':    (StatusFlags.Z if tc[Register.A] == 0 else 0) |
+                                    (StatusFlags.N if tc[Register.A] & 0x80 else 0)
+                      },
+        testcases   = {Register.A: [0x00, 0xAA, 0x42]},
+    ),
+    Instruction(
+        mnemonic    = 'TSX',
+        modes       = {
+                        AddressModeId.Implied:      (0xBA, 2)
+                      },
+        semantics   = lambda tc: {
+                        Register.X: tc[Register.SP],
+                        'Flags':    (StatusFlags.Z if tc[Register.SP] == 0 else 0) |
+                                    (StatusFlags.N if tc[Register.SP] & 0x80 else 0)
+                      },
+        testcases   = {Register.SP: [0x00, 0xAA, 0x42]},
+    ),
+    Instruction(
+        mnemonic    = 'TXA',
+        modes       = {
+                        AddressModeId.Implied:      (0x8A, 2)
+                      },
+        semantics   = lambda tc: {
+                        Register.A: tc[Register.X],
+                        'Flags':    (StatusFlags.Z if tc[Register.X] == 0 else 0) |
+                                    (StatusFlags.N if tc[Register.X] & 0x80 else 0)
+                      },
+        testcases   = {Register.X: [0x00, 0xAA, 0x42]},
+    ),
+    Instruction(
+        mnemonic    = 'TXS',
+        modes       = {
+                        AddressModeId.Implied:      (0x9A, 2)
+                      },
+        semantics   = lambda tc: {
+                        Register.SP: tc[Register.X],
+                        'Flags':    (StatusFlags.Z if tc[Register.X] == 0 else 0) |
+                                    (StatusFlags.N if tc[Register.X] & 0x80 else 0)
+                      },
+        testcases   = {Register.X: [0x00, 0xAA, 0x42]},
+    ),
+    Instruction(
+        mnemonic    = 'TYA',
+        modes       = {
+                        AddressModeId.Implied:      (0x98, 2)
+                      },
+        semantics   = lambda tc: {
+                        Register.A: tc[Register.Y],
+                        'Flags':    (StatusFlags.Z if tc[Register.Y] == 0 else 0) |
+                                    (StatusFlags.N if tc[Register.Y] & 0x80 else 0)
+                      },
+        testcases   = {Register.Y: [0x00, 0xAA, 0x42]},
+    ),
+]
+
+print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
+
+def expand_operand_values(spec: dict[Operand, list[int]]):
+    keys = spec.keys()
+    for p in product(*spec.values()):
+        yield dict(zip(keys, p))
+
 def gen_instruction_tests(instr: Instruction) -> None:
-    for mode, (opcode, timing) in instr.modes.items():
-        gen_templates = instr.templates[mode]
-        for value in instr.values:
-            for template in gen_templates(opcode, value):
+    for testcase in expand_operand_values(instr.testcases):
+        expected = instr.semantics(testcase)
+        for mode, (opcode, timing) in instr.modes.items():
+
+            if instr.tdatastrat == TemplateDataStrat.FromTestcase:
+                data_val = testcase['Memory']
+            elif instr.tdatastrat == TemplateDataStrat.InvertExpected:
+                data_val = ~expected['Memory'] & 0xFF
+            elif instr.tdatastrat == TemplateDataStrat.Nop:
+                data_val = 0
+
+            gen_templates = templates[mode]
+            for template in gen_templates(opcode, data_val):
+
                 template_tag = f"_{template.tag}" if template.tag else ""
-                test_name = f"test_{instr.mnemonic}_{mode.value}{template_tag}_{value:02x}".lower()
+                testcase_tag = "_".join(f"{v:02x}" for v in testcase.values())
+                test_name = f"test_{instr.mnemonic}_{mode.value}{template_tag}_{testcase_tag}".lower()
 
                 print(f"ep_test({test_name})")
                 print( "{")
@@ -175,11 +399,12 @@ def gen_instruction_tests(instr: Instruction) -> None:
                 print()
 
                 # Setup the src operands and template state
-                for op in instr.operands:
-                    if op == Register.X or op == Register.Y or op == Register.A:
-                        print(f"    cpu.{op.value} = 0x{value:02x};");
-                    else:
+                for key, value in testcase.items():
+                    if isinstance(key, Register):
+                        print(f"    cpu.{key.value} = 0x{value:02x};");
+                    elif key != 'Memory':
                         raise ValueError("Invalid operand type")
+
                 if template.state:
                     for reg, val in template.state.items():
                         print(f"    cpu.{reg.value} = 0x{val:02x};");
@@ -193,122 +418,23 @@ def gen_instruction_tests(instr: Instruction) -> None:
                 else:
                     print(f"    ep_verify_equal(cycles, {timing});")
 
-                # Validate the instr output
-                if instr.dest:
-                    if instr.dest == Register.X or instr.dest == Register.Y or instr.dest == Register.A:
-                        print(f"    ep_verify_equal(cpu.{instr.dest.value}, 0x{value:02x});")
-                    elif instr.dest == 'Memory':
+                # Validate the instr expected output
+                expected = instr.semantics(testcase)
+                for key, value in expected.items():
+                    if isinstance(key, Register):
+                        print(f"    ep_verify_equal(cpu.{key.value}, 0x{value:02x});")
+                    elif key == 'Memory':
                         print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x{template.eaddr:04x}), 0x{value:02x});")
+                    elif key == 'Flags':
+                        affected_flags = f"0x{value:02x}"
+                        print(f"    ep_verify_equal(cpu.P & {affected_flags}, {affected_flags});");
+                        print(f"    ep_verify_equal(cpu.P & ~{affected_flags}, orig_flags & ~{affected_flags});");
                     else:
                         raise ValueError("Invalid output operand type")
                 print()
 
-                # Check that flags affected by the instruction are set and that the inverse is true as well.
-                affected_flags: str = "0x00";
-                if instr.flags & StatusFlags.Z and value == 0:
-                    affected_flags += " | SR_Z";
-                if instr.flags & StatusFlags.N and value & 0x80:
-                    affected_flags += " | SR_N";
-                print(f"    mos_word_t affected_flags = {affected_flags};");
-                print(f"    ep_verify_equal(cpu.P & affected_flags, affected_flags);");
-                print(f"    ep_verify_equal(cpu.P & ~affected_flags, orig_flags & ~affected_flags);");
-                print()
-
                 print( "    free_test_cpu(&cpu);");
                 print( "}\n")
-
-instructions: list[Instruction] = [
-    Instruction(
-        mnemonic    = 'LDX',
-        modes       = {
-                        AddressModeId.Immediate:    (0xA2, 2),
-                        AddressModeId.Zeropage:     (0xA6, 3),
-                        AddressModeId.ZeropageY:    (0xB6, 4),
-                        AddressModeId.Absolute:     (0xAE, 4),
-                        AddressModeId.AbsoluteY:    (0xBE, 4),
-                    },
-        flags       = StatusFlags.N | StatusFlags.Z,
-        templates   = load_templates,
-        values      = [0x42, 0xAA, 0x00],
-        dest        = Register.X,
-        xpagestall  = True,
-    ),
-    Instruction(
-        mnemonic    = 'LDY',
-        modes       = {
-                        AddressModeId.Immediate:    (0xA0, 2),
-                        AddressModeId.Zeropage:     (0xA4, 3),
-                        AddressModeId.ZeropageX:    (0xB4, 4),
-                        AddressModeId.Absolute:     (0xAC, 4),
-                        AddressModeId.AbsoluteX:    (0xBC, 4),
-                    },
-        flags       = StatusFlags.N | StatusFlags.Z,
-        templates   = load_templates,
-        values      = [0x42, 0xAA, 0x00],
-        dest        = Register.Y,
-        xpagestall  = True,
-    ),
-    Instruction(
-        mnemonic    = 'LDA',
-        modes       = {
-                        AddressModeId.Immediate:    (0xA9, 2),
-                        AddressModeId.Zeropage:     (0xA5, 3),
-                        AddressModeId.ZeropageX:    (0xB5, 4),
-                        AddressModeId.Absolute:     (0xAD, 4),
-                        AddressModeId.AbsoluteX:    (0xBD, 4),
-                        AddressModeId.AbsoluteY:    (0xB9, 4),
-                        AddressModeId.IndirectX:    (0xA1, 6),
-                        AddressModeId.IndirectY:    (0xB1, 5),
-                    },
-        flags       = StatusFlags.N | StatusFlags.Z,
-        templates   = load_templates,
-        values      = [0x42, 0xAA, 0x00],
-        dest        = Register.A,
-        xpagestall  = True,
-    ),
-    Instruction(
-        mnemonic    = 'STX',
-        modes       = {
-                        AddressModeId.Zeropage:     (0x86, 3),
-                        AddressModeId.ZeropageY:    (0x96, 4),
-                        AddressModeId.Absolute:     (0x8E, 4),
-                    },
-        templates   = load_templates,
-        values      = [0x42],
-        operands    = [Register.X],
-        dest        = 'Memory',
-    ),
-    Instruction(
-        mnemonic    = 'STY',
-        modes       = {
-                        AddressModeId.Zeropage:     (0x84, 3),
-                        AddressModeId.ZeropageX:    (0x94, 4),
-                        AddressModeId.Absolute:     (0x8C, 4),
-                    },
-        templates   = load_templates,
-        values      = [0x42],
-        operands    = [Register.Y],
-        dest        = 'Memory',
-    ),
-    Instruction(
-        mnemonic    = 'STA',
-        modes       = {
-                        AddressModeId.Zeropage:     (0x85, 3),
-                        AddressModeId.ZeropageX:    (0x95, 4),
-                        AddressModeId.Absolute:     (0x8D, 4),
-                        AddressModeId.AbsoluteX:    (0x9D, 5),
-                        AddressModeId.AbsoluteY:    (0x99, 5),
-                        AddressModeId.IndirectX:    (0x81, 6),
-                        AddressModeId.IndirectY:    (0x91, 6),
-                    },
-        templates   = load_templates,
-        values      = [0x42],
-        operands    = [Register.A],
-        dest        = 'Memory',
-    ),
-]
-
-print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
 
 for instr in instructions:
     gen_instruction_tests(instr)
