@@ -29,6 +29,10 @@ enum mos6502_uop
     MOS_UOP_TXA,
     MOS_UOP_TXS,
     MOS_UOP_TYA,
+    MOS_UOP_PHA,
+    MOS_UOP_PLA,
+    MOS_UOP_PHP,
+    MOS_UOP_PLP,
 };
 
 enum mos6502_addr_mode
@@ -203,6 +207,11 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0x8A, TXA, MOS_AM_IMP,  MOS_UOP_TXA),
     MOS_OP(0x9A, TXS, MOS_AM_IMP,  MOS_UOP_TXS),
     MOS_OP(0x98, TYA, MOS_AM_IMP,  MOS_UOP_TYA),
+
+    MOS_OP(0x48, PHA, MOS_AM_IMP,  MOS_UOP_PHA),
+    MOS_OP(0x68, PLA, MOS_AM_IMP,  MOS_UOP_PLA),
+    MOS_OP(0x08, PHP, MOS_AM_IMP,  MOS_UOP_PHP),
+    MOS_OP(0x28, PLP, MOS_AM_IMP,  MOS_UOP_PLP),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -412,6 +421,8 @@ static void uop_exec(struct mos6502_cpu* cpu)
         MOS_REG(_reg_) = (_val_); \
         cpu->P |= (!MOS_REG(_reg_) ? SR_Z : 0) | ((MOS_REG(_reg_) & 0x80) ? SR_N : 0); \
 
+    bool tplus = true;
+
     switch (cpu->instr.uop) {
     case MOS_UOP_NOP:
         break;
@@ -460,6 +471,68 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_TYA:
         MOS_STORE_REG(A, cpu->Y);
         break;
+    case MOS_UOP_PHA:
+        switch (cpu->instr.cycle) {
+        case 0:
+            cpu->AB = 0x0100 | cpu->SP;
+            tplus = false;
+            break;
+        case 1:
+            store_word(cpu, cpu->AB, cpu->A);
+            cpu->SP--;
+            break;
+        default:
+            ep_verify(false);
+        };
+        break;
+    case MOS_UOP_PLA:
+        tplus = false;
+        switch (cpu->instr.cycle) {
+        case 0:
+            cpu->SP++;
+            break;
+        case 1:
+            cpu->AB = 0x0100 | cpu->SP;
+            break;
+        case 2:
+            MOS_STORE_REG(A, load_word(cpu, cpu->AB));
+            tplus = true;
+            break;
+        default:
+            ep_verify(false);
+        };
+        break;
+    case MOS_UOP_PHP:
+        switch (cpu->instr.cycle) {
+        case 0:
+            cpu->AB = 0x0100 | cpu->SP;
+            tplus = false;
+            break;
+        case 1:
+            store_word(cpu, cpu->AB, cpu->P | SR_B | SR_U);
+            cpu->SP--;
+            break;
+        default:
+            ep_verify(false);
+        };
+        break;
+    case MOS_UOP_PLP:
+        tplus = false;
+        switch (cpu->instr.cycle) {
+        case 0:
+            cpu->SP++;
+            break;
+        case 1:
+            cpu->AB = 0x0100 | cpu->SP;
+            break;
+        case 2:
+            cpu->P = (cpu->P & (SR_B | SR_U)) | (load_word(cpu, cpu->AB) & ~(SR_B | SR_U));
+            tplus = true;
+            break;
+        default:
+            ep_verify(false);
+        };
+        break;
     default:
         ep_verify(false);
     };
@@ -467,7 +540,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
     #undef MOS_STORE_REG
     #undef MOS_REG
 
-    cpu->instr.tplus = 1;
+    cpu->instr.tplus = tplus;
 }
 
 static void insert_pa_range(struct mos6502_cpu* cpu, struct mos6502_pa_range* range)
@@ -702,6 +775,7 @@ ep_test(test_reset)
 
     ep_verify_equal(cpu.cycle, 8);
     ep_verify_equal(cpu.PC, 0x0001);
+    ep_verify_equal(cpu.SP, 0xfd);
     ep_verify(!(cpu.P & SR_B));
     ep_verify(!(cpu.P & SR_D));
     ep_verify(cpu.P & SR_I);

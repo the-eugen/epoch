@@ -248,7 +248,6 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         'Memory': tc[Register.X],
-                        'Flags':  0
                       },
         testcases   = {Register.X: [0x42]},
         tdatastrat  = TemplateDataStrat.InvertExpected,
@@ -262,7 +261,6 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         'Memory': tc[Register.Y],
-                        'Flags':  0
                       },
         testcases   = {Register.Y: [0x42]},
         tdatastrat  = TemplateDataStrat.InvertExpected,
@@ -280,7 +278,6 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         'Memory': tc[Register.A],
-                        'Flags':  0
                       },
         testcases   = {Register.A: [0x42]},
         tdatastrat  = TemplateDataStrat.InvertExpected,
@@ -357,6 +354,54 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.Y: [0x00, 0xAA, 0x42]},
     ),
+    Instruction(
+        mnemonic    = 'PHA',
+        modes       = {
+                        AddressModeId.Implied:      (0x48, 3)
+                      },
+        semantics   = lambda tc: {
+                        Register.SP: tc[Register.SP] - 1,
+                        'Stack':     tc[Register.A],
+                      },
+        testcases   = { Register.A: [0xAA], Register.SP: [0xFD] },
+    ),
+    Instruction(
+        mnemonic    = 'PLA',
+        modes       = {
+                        AddressModeId.Implied:      (0x68, 4)
+                      },
+        semantics   = lambda tc: {
+                        Register.A:     tc['Stack'],
+                        Register.SP:    tc[Register.SP] + 1,
+                        'Flags':        (StatusFlags.Z if tc['Stack'] == 0 else 0) |
+                                        (StatusFlags.N if tc['Stack'] & 0x80 else 0)
+                      },
+        testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFC] },
+    ),
+    Instruction(
+        mnemonic    = 'PHP',
+        modes       = {
+                        AddressModeId.Implied:      (0x08, 3)
+                      },
+        semantics   = lambda tc: {
+                        # SP is pushed on stack with bits 4 and 5 set
+                        'Stack':     tc[Register.P] | 0x30,
+                        Register.SP: tc[Register.SP] - 1,
+                      },
+        testcases   = { Register.P: [0xCF], Register.SP: [0xFD] },
+    ),
+    Instruction(
+        mnemonic    = 'PLP',
+        modes       = {
+                        AddressModeId.Implied:      (0x28, 4)
+                      },
+        semantics   = lambda tc: {
+                        # SP pulled from stack ignores bits 4 and 5
+                        'Flags':     (tc['Stack'] & ~0x30) | (tc[Register.P] & 0x30),
+                        Register.SP: tc[Register.SP] + 1,
+                      },
+        testcases   = { 'Stack': [0xFF], Register.P: [0x16], Register.SP: [0xFC] },
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
@@ -402,6 +447,9 @@ def gen_instruction_tests(instr: Instruction) -> None:
                 for key, value in testcase.items():
                     if isinstance(key, Register):
                         print(f"    cpu.{key.value} = 0x{value:02x};");
+                    elif key == 'Stack':
+                        sp = testcase[Register.SP] + 1
+                        print(f"    mos6502_store_word(&cpu, 0x0100 | 0x{sp:02x}, 0x{value:02x});")
                     elif key != 'Memory':
                         raise ValueError("Invalid operand type")
 
@@ -419,7 +467,7 @@ def gen_instruction_tests(instr: Instruction) -> None:
                     print(f"    ep_verify_equal(cycles, {timing});")
 
                 # Validate the instr expected output
-                expected = instr.semantics(testcase)
+                affected_flags = 0
                 for key, value in expected.items():
                     if isinstance(key, Register):
                         print(f"    ep_verify_equal(cpu.{key.value}, 0x{value:02x});")
@@ -427,10 +475,17 @@ def gen_instruction_tests(instr: Instruction) -> None:
                         print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x{template.eaddr:04x}), 0x{value:02x});")
                     elif key == 'Flags':
                         affected_flags = f"0x{value:02x}"
-                        print(f"    ep_verify_equal(cpu.P & {affected_flags}, {affected_flags});");
-                        print(f"    ep_verify_equal(cpu.P & ~{affected_flags}, orig_flags & ~{affected_flags});");
+                    elif key == 'Stack':
+                        print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x0100 | (cpu.SP + 1)), 0x{value:02x});")
                     else:
                         raise ValueError("Invalid output operand type")
+
+                # If there are no affected flags we still check for unexpected modifications
+                if affected_flags != 0:
+                    print(f"    ep_verify_equal(cpu.P & {affected_flags}, {affected_flags});");
+                    print(f"    ep_verify_equal(cpu.P & ~{affected_flags}, orig_flags & ~{affected_flags});");
+                else:
+                    print(f"    ep_verify_equal(cpu.P, orig_flags);")
                 print()
 
                 print( "    free_test_cpu(&cpu);");
