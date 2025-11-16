@@ -152,7 +152,7 @@ templates: dict[AddressModeId, TemplateGen] = {
     ],
 }
 
-Operand: TypeAlias = Union[Register, Literal['Memory'], Literal['Flags']]
+Operand: TypeAlias = Union[Register, Literal['Memory'], Literal['Flags'], Literal['Stack']]
 Semantics = Callable[dict[Operand, int], dict[Operand, int]]
 
 class TemplateDataStrat(Enum):
@@ -170,16 +170,16 @@ class Instruction:
     xpagestall: Optional[bool] = False
 
 # Used for load-type instructions where template data value is the testcase input
-def data_value_from_testcase(tc, exp):
-    return tc["Memory"]
+def data_value_from_testcase(tc, exp): return tc["Memory"]
 
 # Used for store-type instructions where template data value is the inverse of expected to catch missing stores
-def data_value_invert_expected(tc, exp):
-    return (~exp["Memory"]) & 0xFF
+def data_value_invert_expected(tc, exp): return (~exp["Memory"]) & 0xFF
 
 # Used for instructions that do not touch memory (e.g. NOP)
-def data_value_constant(tc, exp):
-    return 0
+def data_value_constant(tc, exp): return 0
+
+def flag_z(v: int): return StatusFlags.Z if v == 0 else 0
+def flag_n(v: int): return StatusFlags.N if v & 0x80 else 0
 
 instructions: list[Instruction] = [
     Instruction(
@@ -193,8 +193,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc['Memory'],
-                        'Flags':    (StatusFlags.Z if tc['Memory'] == 0 else 0) |
-                                    (StatusFlags.N if tc['Memory'] & 0x80 else 0)
+                        'Flags':    flag_z(tc['Memory']) | flag_n(tc['Memory'])
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -211,8 +210,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.Y: tc['Memory'],
-                        'Flags':    (StatusFlags.Z if tc['Memory'] == 0 else 0) |
-                                    (StatusFlags.N if tc['Memory'] & 0x80 else 0)
+                        'Flags':    flag_z(tc['Memory']) | flag_n(tc['Memory'])
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -232,8 +230,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc['Memory'],
-                        'Flags':    (StatusFlags.Z if tc['Memory'] == 0 else 0) |
-                                    (StatusFlags.N if tc['Memory'] & 0x80 else 0)
+                        'Flags':    flag_z(tc['Memory']) | flag_n(tc['Memory'])
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -289,8 +286,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc[Register.A],
-                        'Flags':    (StatusFlags.Z if tc[Register.A] == 0 else 0) |
-                                    (StatusFlags.N if tc[Register.A] & 0x80 else 0)
+                        'Flags':    flag_z(tc[Register.A]) | flag_n(tc[Register.A])
                       },
         testcases   = {Register.A: [0x00, 0xAA, 0x42]},
     ),
@@ -301,8 +297,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.Y: tc[Register.A],
-                        'Flags':    (StatusFlags.Z if tc[Register.A] == 0 else 0) |
-                                    (StatusFlags.N if tc[Register.A] & 0x80 else 0)
+                        'Flags':    flag_z(tc[Register.A]) | flag_n(tc[Register.A])
                       },
         testcases   = {Register.A: [0x00, 0xAA, 0x42]},
     ),
@@ -313,8 +308,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc[Register.SP],
-                        'Flags':    (StatusFlags.Z if tc[Register.SP] == 0 else 0) |
-                                    (StatusFlags.N if tc[Register.SP] & 0x80 else 0)
+                        'Flags':    flag_z(tc[Register.SP]) | flag_n(tc[Register.SP])
                       },
         testcases   = {Register.SP: [0x00, 0xAA, 0x42]},
     ),
@@ -325,8 +319,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc[Register.X],
-                        'Flags':    (StatusFlags.Z if tc[Register.X] == 0 else 0) |
-                                    (StatusFlags.N if tc[Register.X] & 0x80 else 0)
+                        'Flags':    flag_z(tc[Register.X]) | flag_n(tc[Register.X])
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42]},
     ),
@@ -337,8 +330,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.SP: tc[Register.X],
-                        'Flags':    (StatusFlags.Z if tc[Register.X] == 0 else 0) |
-                                    (StatusFlags.N if tc[Register.X] & 0x80 else 0)
+                        'Flags':    flag_z(tc[Register.X]) | flag_n(tc[Register.X])
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42]},
     ),
@@ -349,8 +341,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc[Register.Y],
-                        'Flags':    (StatusFlags.Z if tc[Register.Y] == 0 else 0) |
-                                    (StatusFlags.N if tc[Register.Y] & 0x80 else 0)
+                        'Flags':    flag_z(tc[Register.Y]) | flag_n(tc[Register.Y])
                       },
         testcases   = {Register.Y: [0x00, 0xAA, 0x42]},
     ),
@@ -373,8 +364,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: {
                         Register.A:     tc['Stack'],
                         Register.SP:    tc[Register.SP] + 1,
-                        'Flags':        (StatusFlags.Z if tc['Stack'] == 0 else 0) |
-                                        (StatusFlags.N if tc['Stack'] & 0x80 else 0)
+                        'Flags':        flag_z(tc['Stack']) | flag_n(tc['Stack'])
                       },
         testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFC] },
     ),
