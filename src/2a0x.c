@@ -33,6 +33,12 @@ enum mos6502_uop
     MOS_UOP_PLA,
     MOS_UOP_PHP,
     MOS_UOP_PLP,
+    MOS_UOP_DEC,
+    MOS_UOP_DEX,
+    MOS_UOP_DEY,
+    MOS_UOP_INC,
+    MOS_UOP_INX,
+    MOS_UOP_INY,
 };
 
 enum mos6502_addr_mode
@@ -60,18 +66,23 @@ struct mos6502_instr
     /* Current instruction cycle, 0-based. */
     uint8_t cycle;
 
+    /* Total cycles this instruction takes to execute */
+    uint8_t ncycles;
+
     /* Execution flags */
     union {
         uint8_t flags;
+        /* The instruction address has been latched */
         #define MOS_INSTR_ADDR_LATCHED  (1u << 0)
+        /* This intruction can stall for 1 cycle on page cross */
         #define MOS_INSTR_XPAGE_STALL   (1u << 1)
-        #define MOS_INSTR_ALWAYS_STALL  (1u << 2)
+        /* This is a write instruction and will take an extra cycle */
+        #define MOS_INSTR_RW  (1u << 2)
         struct {
             uint8_t address_latched:1;
             uint8_t xpage_stall:1;
             uint8_t always_stall:1;
-            uint8_t tplus:1;
-            uint8_t _unused:4;
+            uint8_t _unused:5;
         };
     };
 };
@@ -128,15 +139,16 @@ struct mos6502_cpu
     struct mos6502_pa_range pa_map[8];
 };
 
-#define _MOS_OP_FLAGS(_opc_, _mnemonic_, _mode_, _uop_, _flags_) \
+#define _MOS_OP_FLAGS(_opc_, _mnemonic_, _mode_, _ncycles_, _flags_) \
     [(_opc_)] = (struct mos6502_instr) { \
-        .uop = (_uop_), \
+        .uop = MOS_UOP_ ##_mnemonic_, \
         .mode = (_mode_), \
+        .ncycles = (_ncycles_), \
         .flags = (_flags_), \
     }
 
-#define _MOS_OP(_opc_, _mnemonic_, _mode_, _uop_) \
-    _MOS_OP_FLAGS(_opc_, _mnemonic_, _mode_, _uop_, 0)
+#define _MOS_OP(_opc_, _mnemonic_, _mode_, _ncycles_) \
+    _MOS_OP_FLAGS(_opc_, _mnemonic_, _mode_, _ncycles_, 0)
 
 #define _MOS_APPLY_N(_1, _2, _3, _4, _5, _apply, ...) \
     _apply
@@ -149,69 +161,83 @@ struct mos6502_cpu
 
 static const struct mos6502_instr mos_opcodes[] =
 {
-    MOS_OP(0xea, NOP, MOS_AM_IMP,  MOS_UOP_NOP),
+    MOS_OP(0xea, NOP, MOS_AM_IMP,  2),
 
-    MOS_OP(0x02, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0x12, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0x22, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0x32, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0x42, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0x52, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0x62, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0x72, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0x92, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0xb2, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0xd2, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
-    MOS_OP(0xf2, HLT, MOS_AM_IMP,  MOS_UOP_HLT),
+    MOS_OP(0x02, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x12, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x22, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x32, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x42, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x52, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x62, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x72, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x92, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0xb2, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0xd2, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0xf2, HLT, MOS_AM_IMP,  1),
 
-    MOS_OP(0xa9, LDA, MOS_AM_IMM,  MOS_UOP_LDA),
-    MOS_OP(0xa5, LDA, MOS_AM_Z,    MOS_UOP_LDA),
-    MOS_OP(0xb5, LDA, MOS_AM_ZX,   MOS_UOP_LDA),
-    MOS_OP(0xad, LDA, MOS_AM_ABS,  MOS_UOP_LDA),
-    MOS_OP(0xbd, LDA, MOS_AM_ABSX, MOS_UOP_LDA, MOS_INSTR_XPAGE_STALL),
-    MOS_OP(0xb9, LDA, MOS_AM_ABSY, MOS_UOP_LDA, MOS_INSTR_XPAGE_STALL),
-    MOS_OP(0xa1, LDA, MOS_AM_INDX, MOS_UOP_LDA),
-    MOS_OP(0xb1, LDA, MOS_AM_INDY, MOS_UOP_LDA, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xa9, LDA, MOS_AM_IMM,  2),
+    MOS_OP(0xa5, LDA, MOS_AM_Z,    3),
+    MOS_OP(0xb5, LDA, MOS_AM_ZX,   4),
+    MOS_OP(0xad, LDA, MOS_AM_ABS,  4),
+    MOS_OP(0xbd, LDA, MOS_AM_ABSX, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xb9, LDA, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xa1, LDA, MOS_AM_INDX, 6),
+    MOS_OP(0xb1, LDA, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
 
-    MOS_OP(0xa2, LDX, MOS_AM_IMM,  MOS_UOP_LDX),
-    MOS_OP(0xa6, LDX, MOS_AM_Z,    MOS_UOP_LDX),
-    MOS_OP(0xb6, LDX, MOS_AM_ZY,   MOS_UOP_LDX),
-    MOS_OP(0xae, LDX, MOS_AM_ABS,  MOS_UOP_LDX),
-    MOS_OP(0xbe, LDX, MOS_AM_ABSY, MOS_UOP_LDX, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xa2, LDX, MOS_AM_IMM,  2),
+    MOS_OP(0xa6, LDX, MOS_AM_Z,    3),
+    MOS_OP(0xb6, LDX, MOS_AM_ZY,   4),
+    MOS_OP(0xae, LDX, MOS_AM_ABS,  4),
+    MOS_OP(0xbe, LDX, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
 
-    MOS_OP(0xa0, LDY, MOS_AM_IMM,  MOS_UOP_LDY),
-    MOS_OP(0xa4, LDY, MOS_AM_Z,    MOS_UOP_LDY),
-    MOS_OP(0xb4, LDY, MOS_AM_ZX,   MOS_UOP_LDY),
-    MOS_OP(0xac, LDY, MOS_AM_ABS,  MOS_UOP_LDY),
-    MOS_OP(0xbc, LDY, MOS_AM_ABSX, MOS_UOP_LDY, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xa0, LDY, MOS_AM_IMM,  2),
+    MOS_OP(0xa4, LDY, MOS_AM_Z,    3),
+    MOS_OP(0xb4, LDY, MOS_AM_ZX,   4),
+    MOS_OP(0xac, LDY, MOS_AM_ABS,  4),
+    MOS_OP(0xbc, LDY, MOS_AM_ABSX, 4, MOS_INSTR_XPAGE_STALL),
 
-    MOS_OP(0x85, STA, MOS_AM_Z,    MOS_UOP_STA),
-    MOS_OP(0x95, STA, MOS_AM_ZX,   MOS_UOP_STA),
-    MOS_OP(0x8D, STA, MOS_AM_ABS,  MOS_UOP_STA),
-    MOS_OP(0x9D, STA, MOS_AM_ABSX, MOS_UOP_STA, MOS_INSTR_ALWAYS_STALL),
-    MOS_OP(0x99, STA, MOS_AM_ABSY, MOS_UOP_STA, MOS_INSTR_ALWAYS_STALL),
-    MOS_OP(0x81, STA, MOS_AM_INDX, MOS_UOP_STA),
-    MOS_OP(0x91, STA, MOS_AM_INDY, MOS_UOP_STA, MOS_INSTR_ALWAYS_STALL),
+    MOS_OP(0x85, STA, MOS_AM_Z,    3),
+    MOS_OP(0x95, STA, MOS_AM_ZX,   4),
+    MOS_OP(0x8D, STA, MOS_AM_ABS,  4),
+    MOS_OP(0x9D, STA, MOS_AM_ABSX, 5, MOS_INSTR_RW),
+    MOS_OP(0x99, STA, MOS_AM_ABSY, 5, MOS_INSTR_RW),
+    MOS_OP(0x81, STA, MOS_AM_INDX, 6),
+    MOS_OP(0x91, STA, MOS_AM_INDY, 6, MOS_INSTR_RW),
 
-    MOS_OP(0x86, STX, MOS_AM_Z,    MOS_UOP_STX),
-    MOS_OP(0x96, STX, MOS_AM_ZY,   MOS_UOP_STX),
-    MOS_OP(0x8E, STX, MOS_AM_ABS,  MOS_UOP_STX),
+    MOS_OP(0x86, STX, MOS_AM_Z,    3),
+    MOS_OP(0x96, STX, MOS_AM_ZY,   4),
+    MOS_OP(0x8E, STX, MOS_AM_ABS,  4),
 
-    MOS_OP(0x84, STY, MOS_AM_Z,    MOS_UOP_STY),
-    MOS_OP(0x94, STY, MOS_AM_ZX,   MOS_UOP_STY),
-    MOS_OP(0x8C, STY, MOS_AM_ABS,  MOS_UOP_STY),
+    MOS_OP(0x84, STY, MOS_AM_Z,    3),
+    MOS_OP(0x94, STY, MOS_AM_ZX,   4),
+    MOS_OP(0x8C, STY, MOS_AM_ABS,  4),
 
-    MOS_OP(0xAA, TAX, MOS_AM_IMP,  MOS_UOP_TAX),
-    MOS_OP(0xA8, TAY, MOS_AM_IMP,  MOS_UOP_TAY),
-    MOS_OP(0xBA, TSX, MOS_AM_IMP,  MOS_UOP_TSX),
-    MOS_OP(0x8A, TXA, MOS_AM_IMP,  MOS_UOP_TXA),
-    MOS_OP(0x9A, TXS, MOS_AM_IMP,  MOS_UOP_TXS),
-    MOS_OP(0x98, TYA, MOS_AM_IMP,  MOS_UOP_TYA),
+    MOS_OP(0xAA, TAX, MOS_AM_IMP,  2),
+    MOS_OP(0xA8, TAY, MOS_AM_IMP,  2),
+    MOS_OP(0xBA, TSX, MOS_AM_IMP,  2),
+    MOS_OP(0x8A, TXA, MOS_AM_IMP,  2),
+    MOS_OP(0x9A, TXS, MOS_AM_IMP,  2),
+    MOS_OP(0x98, TYA, MOS_AM_IMP,  2),
 
-    MOS_OP(0x48, PHA, MOS_AM_IMP,  MOS_UOP_PHA),
-    MOS_OP(0x68, PLA, MOS_AM_IMP,  MOS_UOP_PLA),
-    MOS_OP(0x08, PHP, MOS_AM_IMP,  MOS_UOP_PHP),
-    MOS_OP(0x28, PLP, MOS_AM_IMP,  MOS_UOP_PLP),
+    MOS_OP(0x48, PHA, MOS_AM_IMP,  3),
+    MOS_OP(0x68, PLA, MOS_AM_IMP,  4),
+    MOS_OP(0x08, PHP, MOS_AM_IMP,  3),
+    MOS_OP(0x28, PLP, MOS_AM_IMP,  4),
+
+    MOS_OP(0xC6, DEC, MOS_AM_Z,    5),
+    MOS_OP(0xD6, DEC, MOS_AM_ZX,   6),
+    MOS_OP(0xCE, DEC, MOS_AM_ABS,  6),
+    MOS_OP(0xDE, DEC, MOS_AM_ABSX, 7, MOS_INSTR_RW),
+    MOS_OP(0xCA, DEX, MOS_AM_IMP,  2),
+    MOS_OP(0x88, DEY, MOS_AM_IMP,  2),
+
+    MOS_OP(0xE6, INC, MOS_AM_Z,    5),
+    MOS_OP(0xF6, INC, MOS_AM_ZX,   6),
+    MOS_OP(0xEE, INC, MOS_AM_ABS,  6),
+    MOS_OP(0xFE, INC, MOS_AM_ABSX, 7, MOS_INSTR_RW),
+    MOS_OP(0xE8, INX, MOS_AM_IMP,  2),
+    MOS_OP(0xC8, INY, MOS_AM_IMP,  2),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -233,14 +259,14 @@ static mos_word_t load_word(struct mos6502_cpu* cpu, mos_pa_t pa)
     const struct mos6502_pa_range* r = map_addr(cpu, pa);
     ep_verify(r);
 
-    mos_word_t res;
+    mos_word_t val;
     if (r->is_ram) {
-        res = r->mapped[pa - r->base];
+        val = r->mapped[pa - r->base];
     } else {
-        r->handler(cpu, r, false, pa - r->base, &res);
+        r->handler(cpu, r, false, pa - r->base, &val);
     }
 
-    return res;
+    return val;
 }
 
 static void store_word(struct mos6502_cpu* cpu, mos_pa_t pa, mos_word_t val)
@@ -265,6 +291,32 @@ static void latch_address(struct mos6502_cpu* cpu, mos_pa_t addr)
 {
     cpu->AB = addr;
     cpu->instr.address_latched = true;
+}
+
+static inline bool instr_is_tplus(struct mos6502_instr instr)
+{
+    /* HLT never has a T+ stage */
+    return (instr.uop != MOS_UOP_HLT) && (instr.cycle + 1 == instr.ncycles);
+}
+
+static inline bool instr_should_stall(struct mos6502_instr* instr, mos_pa_t base, mos_word_t index)
+{
+    if (instr->always_stall) {
+        return true;
+    }
+
+    if ((~base & 0xFF) < index && instr->xpage_stall) {
+        /* Insert a 1 cycle delay on page crossing without completing the uop */
+        instr->ncycles++;
+        return true;
+    }
+
+    return false;
+}
+
+static inline void update_arith_flags(struct mos6502_cpu* cpu, mos_word_t val)
+{
+    cpu->P |= (!val ? SR_Z : 0) | ((val & 0x80) ? SR_N : 0);
 }
 
 static bool addr_mode_exec(struct mos6502_cpu* cpu)
@@ -333,8 +385,7 @@ static bool addr_mode_exec(struct mos6502_cpu* cpu)
             break;
         case 1:
             cpu->AB = ((mos_pa_t)load_word(cpu, cpu->PC++) << 8) | cpu->AB;
-            if (((~cpu->AB & 0xFF) < cpu->X && cpu->instr.xpage_stall) || cpu->instr.always_stall) {
-                /* Insert a 1 cycle delay on page crossing without completing the uop */
+            if (instr_should_stall(&cpu->instr, cpu->AB, cpu->X)) {
                 break;
             }
             /* fallthru */
@@ -352,8 +403,7 @@ static bool addr_mode_exec(struct mos6502_cpu* cpu)
             break;
         case 1:
             cpu->AB = ((mos_pa_t)load_word(cpu, cpu->PC++) << 8) | cpu->AB;
-            if (((~cpu->AB & 0xFF) < cpu->Y && cpu->instr.xpage_stall) || cpu->instr.always_stall) {
-                /* Insert a 1 cycle delay on page crossing without completing the uop */
+            if (instr_should_stall(&cpu->instr, cpu->AB, cpu->Y)) {
                 break;
             }
             /* fallthru */
@@ -393,8 +443,7 @@ static bool addr_mode_exec(struct mos6502_cpu* cpu)
             break;
         case 2:
             cpu->AB = ((mos_pa_t)load_word(cpu, cpu->DB) << 8) | cpu->AB;
-            if (((~cpu->AB & 0xFF) < cpu->Y && cpu->instr.xpage_stall) || cpu->instr.always_stall) {
-                /* Insert a 1 cycle delay on page crossing without completing the uop */
+            if (instr_should_stall(&cpu->instr, cpu->AB, cpu->Y)) {
                 break;
             }
             /* fallthru */
@@ -416,13 +465,6 @@ static void uop_exec(struct mos6502_cpu* cpu)
 {
     ep_verify(!cpu->halted);
 
-    #define MOS_REG(_reg_) cpu->_reg_
-    #define MOS_STORE_REG(_reg_, _val_) \
-        MOS_REG(_reg_) = (_val_); \
-        cpu->P |= (!MOS_REG(_reg_) ? SR_Z : 0) | ((MOS_REG(_reg_) & 0x80) ? SR_N : 0); \
-
-    bool tplus = true;
-
     switch (cpu->instr.uop) {
     case MOS_UOP_NOP:
         break;
@@ -431,15 +473,18 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_UOP_LDA:
         assert(cpu->instr.address_latched);
-        MOS_STORE_REG(A, load_word(cpu, cpu->AB));
+        cpu->A = load_word(cpu, cpu->AB);
+        update_arith_flags(cpu, cpu->A);
         break;
     case MOS_UOP_LDX:
         assert(cpu->instr.address_latched);
-        MOS_STORE_REG(X, load_word(cpu, cpu->AB));
+        cpu->X = load_word(cpu, cpu->AB);
+        update_arith_flags(cpu, cpu->X);
         break;
     case MOS_UOP_LDY:
         assert(cpu->instr.address_latched);
-        MOS_STORE_REG(Y, load_word(cpu, cpu->AB));
+        cpu->Y = load_word(cpu, cpu->AB);
+        update_arith_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_STA:
         assert(cpu->instr.address_latched);
@@ -454,28 +499,33 @@ static void uop_exec(struct mos6502_cpu* cpu)
         store_word(cpu, cpu->AB, cpu->Y);
         break;
     case MOS_UOP_TAX:
-        MOS_STORE_REG(X, cpu->A);
+        cpu->X = cpu->A;
+        update_arith_flags(cpu, cpu->X);
         break;
     case MOS_UOP_TAY:
-        MOS_STORE_REG(Y, cpu->A);
+        cpu->Y = cpu->A;
+        update_arith_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_TSX:
-        MOS_STORE_REG(X, cpu->SP);
+        cpu->X = cpu->SP;
+        update_arith_flags(cpu, cpu->X);
         break;
     case MOS_UOP_TXA:
-        MOS_STORE_REG(A, cpu->X);
+        cpu->A = cpu->X;
+        update_arith_flags(cpu, cpu->A);
         break;
     case MOS_UOP_TXS:
-        MOS_STORE_REG(SP, cpu->X);
+        cpu->SP = cpu->X;
+        update_arith_flags(cpu, cpu->SP);
         break;
     case MOS_UOP_TYA:
-        MOS_STORE_REG(A, cpu->Y);
+        cpu->A = cpu->Y;
+        update_arith_flags(cpu, cpu->A);
         break;
     case MOS_UOP_PHA:
         switch (cpu->instr.cycle) {
         case 0:
             cpu->AB = 0x0100 | cpu->SP;
-            tplus = false;
             break;
         case 1:
             store_word(cpu, cpu->AB, cpu->A);
@@ -486,7 +536,6 @@ static void uop_exec(struct mos6502_cpu* cpu)
         };
         break;
     case MOS_UOP_PLA:
-        tplus = false;
         switch (cpu->instr.cycle) {
         case 0:
             cpu->SP++;
@@ -495,8 +544,8 @@ static void uop_exec(struct mos6502_cpu* cpu)
             cpu->AB = 0x0100 | cpu->SP;
             break;
         case 2:
-            MOS_STORE_REG(A, load_word(cpu, cpu->AB));
-            tplus = true;
+            cpu->A = load_word(cpu, cpu->AB);
+            update_arith_flags(cpu, cpu->A);
             break;
         default:
             ep_verify(false);
@@ -506,7 +555,6 @@ static void uop_exec(struct mos6502_cpu* cpu)
         switch (cpu->instr.cycle) {
         case 0:
             cpu->AB = 0x0100 | cpu->SP;
-            tplus = false;
             break;
         case 1:
             store_word(cpu, cpu->AB, cpu->P | SR_B | SR_U);
@@ -517,7 +565,6 @@ static void uop_exec(struct mos6502_cpu* cpu)
         };
         break;
     case MOS_UOP_PLP:
-        tplus = false;
         switch (cpu->instr.cycle) {
         case 0:
             cpu->SP++;
@@ -527,20 +574,64 @@ static void uop_exec(struct mos6502_cpu* cpu)
             break;
         case 2:
             cpu->P = (cpu->P & (SR_B | SR_U)) | (load_word(cpu, cpu->AB) & ~(SR_B | SR_U));
-            tplus = true;
             break;
         default:
             ep_verify(false);
         };
         break;
+    case MOS_UOP_DEC:
+        assert(cpu->instr.address_latched);
+        switch (cpu->instr.ncycles - cpu->instr.cycle - 1) {
+        case 3:
+            cpu->DB = load_word(cpu, cpu->AB);
+            break;
+        case 2:
+            cpu->DB--;
+            break;
+        case 1:
+            store_word(cpu, cpu->AB, cpu->DB);
+            update_arith_flags(cpu, cpu->DB);
+            break;
+        default:
+            ep_verify(false);
+        }
+        break;
+    case MOS_UOP_INC:
+        assert(cpu->instr.address_latched);
+        switch (cpu->instr.ncycles - cpu->instr.cycle - 1) {
+        case 3:
+            cpu->DB = load_word(cpu, cpu->AB);
+            break;
+        case 2:
+            cpu->DB++;
+            break;
+        case 1:
+            store_word(cpu, cpu->AB, cpu->DB);
+            update_arith_flags(cpu, cpu->DB);
+            break;
+        default:
+            ep_verify(false);
+        }
+        break;
+    case MOS_UOP_DEX:
+        cpu->X = cpu->X - 1;
+        update_arith_flags(cpu, cpu->X);
+        break;
+    case MOS_UOP_INX:
+        cpu->X = cpu->X + 1;
+        update_arith_flags(cpu, cpu->X);
+        break;
+    case MOS_UOP_DEY:
+        cpu->Y = cpu->Y - 1;
+        update_arith_flags(cpu, cpu->Y);
+        break;
+    case MOS_UOP_INY:
+        cpu->Y = cpu->Y + 1;
+        update_arith_flags(cpu, cpu->Y);
+        break;
     default:
         ep_verify(false);
     };
-
-    #undef MOS_STORE_REG
-    #undef MOS_REG
-
-    cpu->instr.tplus = tplus;
 }
 
 static void insert_pa_range(struct mos6502_cpu* cpu, struct mos6502_pa_range* range)
@@ -632,7 +723,7 @@ bool mos6502_tick(struct mos6502_cpu* cpu)
     }
 
     ep_verify(cpu->instr.address_latched);
-    if (!cpu->instr.tplus) {
+    if (!instr_is_tplus(cpu->instr)) {
         uop_exec(cpu);
         if (cpu->halted) {
             goto retire;
@@ -640,7 +731,7 @@ bool mos6502_tick(struct mos6502_cpu* cpu)
         goto cycle_done;
     }
 
-    ep_verify(cpu->instr.tplus);
+    ep_verify(instr_is_tplus(cpu->instr));
     if (!cpu->halted) {
         cpu->instr = fetch_next_instr(cpu);
     }

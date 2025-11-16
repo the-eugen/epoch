@@ -178,8 +178,13 @@ def data_value_invert_expected(tc, exp): return (~exp["Memory"]) & 0xFF
 # Used for instructions that do not touch memory (e.g. NOP)
 def data_value_constant(tc, exp): return 0
 
+# Arithmetic flags side effects
 def flag_z(v: int): return StatusFlags.Z if v == 0 else 0
 def flag_n(v: int): return StatusFlags.N if v & 0x80 else 0
+def arith_affected_flags(op): return (lambda v: flag_z(v) | flag_n(v))(op)
+
+def dec_u8(v: byte): return (v - 1) & 0xFF;
+def inc_u8(v: byte): return (v + 1) & 0xFF;
 
 instructions: list[Instruction] = [
     Instruction(
@@ -193,7 +198,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc['Memory'],
-                        'Flags':    flag_z(tc['Memory']) | flag_n(tc['Memory'])
+                        'Flags':    arith_affected_flags(tc['Memory']),
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -210,7 +215,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.Y: tc['Memory'],
-                        'Flags':    flag_z(tc['Memory']) | flag_n(tc['Memory'])
+                        'Flags':    arith_affected_flags(tc['Memory']),
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -230,7 +235,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc['Memory'],
-                        'Flags':    flag_z(tc['Memory']) | flag_n(tc['Memory'])
+                        'Flags':    arith_affected_flags(tc['Memory']),
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -286,7 +291,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc[Register.A],
-                        'Flags':    flag_z(tc[Register.A]) | flag_n(tc[Register.A])
+                        'Flags':    arith_affected_flags(tc[Register.A]),
                       },
         testcases   = {Register.A: [0x00, 0xAA, 0x42]},
     ),
@@ -297,7 +302,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.Y: tc[Register.A],
-                        'Flags':    flag_z(tc[Register.A]) | flag_n(tc[Register.A])
+                        'Flags':    arith_affected_flags(tc[Register.A]),
                       },
         testcases   = {Register.A: [0x00, 0xAA, 0x42]},
     ),
@@ -308,7 +313,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc[Register.SP],
-                        'Flags':    flag_z(tc[Register.SP]) | flag_n(tc[Register.SP])
+                        'Flags':    arith_affected_flags(tc[Register.SP]),
                       },
         testcases   = {Register.SP: [0x00, 0xAA, 0x42]},
     ),
@@ -319,7 +324,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc[Register.X],
-                        'Flags':    flag_z(tc[Register.X]) | flag_n(tc[Register.X])
+                        'Flags':    arith_affected_flags(tc[Register.X]),
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42]},
     ),
@@ -330,7 +335,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.SP: tc[Register.X],
-                        'Flags':    flag_z(tc[Register.X]) | flag_n(tc[Register.X])
+                        'Flags':    arith_affected_flags(tc[Register.X]),
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42]},
     ),
@@ -341,7 +346,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc[Register.Y],
-                        'Flags':    flag_z(tc[Register.Y]) | flag_n(tc[Register.Y])
+                        'Flags':    arith_affected_flags(tc[Register.Y]),
                       },
         testcases   = {Register.Y: [0x00, 0xAA, 0x42]},
     ),
@@ -364,7 +369,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: {
                         Register.A:     tc['Stack'],
                         Register.SP:    tc[Register.SP] + 1,
-                        'Flags':        flag_z(tc['Stack']) | flag_n(tc['Stack'])
+                        'Flags':        arith_affected_flags(tc['Stack']),
                       },
         testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFC] },
     ),
@@ -391,6 +396,80 @@ instructions: list[Instruction] = [
                         Register.SP: tc[Register.SP] + 1,
                       },
         testcases   = { 'Stack': [0xFF], Register.P: [0x16], Register.SP: [0xFC] },
+    ),
+    Instruction(
+        mnemonic    = 'DEC',
+        modes       = {
+                        AddressModeId.Zeropage:     (0xC6, 5),
+                        AddressModeId.ZeropageX:    (0xD6, 6),
+                        AddressModeId.Absolute:     (0xCE, 6),
+                        AddressModeId.AbsoluteX:    (0xDE, 7),
+                      },
+        semantics   = lambda tc: {
+                        'Memory': dec_u8(tc['Memory']),
+                        'Flags':  arith_affected_flags(dec_u8(tc['Memory'])),
+                      },
+        testcases   = { 'Memory': [0x01, 0xAA, 0x42, 0x00] },
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+    ),
+    Instruction(
+        mnemonic    = 'INC',
+        modes       = {
+                        AddressModeId.Zeropage:     (0xE6, 5),
+                        AddressModeId.ZeropageX:    (0xF6, 6),
+                        AddressModeId.Absolute:     (0xEE, 6),
+                        AddressModeId.AbsoluteX:    (0xFE, 7),
+                      },
+        semantics   = lambda tc: {
+                        'Memory': inc_u8(tc['Memory']),
+                        'Flags':  arith_affected_flags(inc_u8(tc['Memory'])),
+                      },
+        testcases   = { 'Memory': [0xFF, 0xAA, 0x42, 0x00] },
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+    ),
+    Instruction(
+        mnemonic    = 'DEX',
+        modes       = {
+                        AddressModeId.Implied:      (0xCA, 2),
+                      },
+        semantics   = lambda tc: {
+                        Register.X: dec_u8(tc[Register.X]),
+                        'Flags': arith_affected_flags(dec_u8(tc[Register.X])),
+                      },
+        testcases   = { Register.X: [0x00, 0xAA, 0x42, 0xFF] },
+    ),
+    Instruction(
+        mnemonic    = 'DEY',
+        modes       = {
+                        AddressModeId.Implied:      (0x88, 2),
+                      },
+        semantics   = lambda tc: {
+                        Register.Y: dec_u8(tc[Register.Y]),
+                        'Flags': arith_affected_flags(dec_u8(tc[Register.Y])),
+                      },
+        testcases   = { Register.Y: [0x00, 0xAA, 0x42, 0xFF] },
+    ),
+    Instruction(
+        mnemonic    = 'INX',
+        modes       = {
+                        AddressModeId.Implied:      (0xE8, 2),
+                      },
+        semantics   = lambda tc: {
+                        Register.X: inc_u8(tc[Register.X]),
+                        'Flags': arith_affected_flags(inc_u8(tc[Register.X])),
+                      },
+        testcases   = { Register.X: [0x00, 0xAA, 0x42, 0xFF] },
+    ),
+    Instruction(
+        mnemonic    = 'INY',
+        modes       = {
+                        AddressModeId.Implied:      (0xC8, 2),
+                      },
+        semantics   = lambda tc: {
+                        Register.Y: inc_u8(tc[Register.Y]),
+                        'Flags': arith_affected_flags(inc_u8(tc[Register.Y])),
+                      },
+        testcases   = { Register.Y: [0x00, 0xAA, 0x42, 0xFF] },
     ),
 ]
 
