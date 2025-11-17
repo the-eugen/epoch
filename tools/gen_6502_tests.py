@@ -179,12 +179,24 @@ def data_value_invert_expected(tc, exp): return (~exp["Memory"]) & 0xFF
 def data_value_constant(tc, exp): return 0
 
 # Arithmetic flags side effects
-def flag_z(v: int): return StatusFlags.Z if v == 0 else 0
-def flag_n(v: int): return StatusFlags.N if v & 0x80 else 0
-def arith_affected_flags(op): return (lambda v: flag_z(v) | flag_n(v))(op)
+def flag_z(v: int): return StatusFlags.Z if (v & 0xFF) == 0 else 0
+def flag_n(v: int): return StatusFlags.N if (v & 0xFF) & 0x80 else 0
+def flag_c(v: int): return StatusFlags.C if v > 0xFF else 0
+def flag_v(v1: int, v2: int, carry: bool):
+    # The computation here is boring on purpose,
+    # to avoid reusing the same bit-twiddling optimization (and its bugs) as in the code we test.
+    res = (v1 + v2 + carry) & 0xFF
+    sr = -1 if (res & 0x80) else 1
+    s1 = -1 if (v1 & 0x80) else 1
+    s2 = -1 if (v2 & 0x80) else 1
+
+    # 2's complement signed overflow rule: when operand signs are equal and the result sign differs
+    return StatusFlags.V if (s1 == s2) and (sr != s1) else 0
 
 def dec_u8(v: byte): return (v - 1) & 0xFF;
 def inc_u8(v: byte): return (v + 1) & 0xFF;
+
+def data_move_flags(v: int): return flag_z(v) | flag_n(v)
 
 instructions: list[Instruction] = [
     Instruction(
@@ -198,7 +210,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc['Memory'],
-                        'Flags':    arith_affected_flags(tc['Memory']),
+                        'Flags':    data_move_flags(tc['Memory']),
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -215,7 +227,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.Y: tc['Memory'],
-                        'Flags':    arith_affected_flags(tc['Memory']),
+                        'Flags':    data_move_flags(tc['Memory']),
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -235,7 +247,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc['Memory'],
-                        'Flags':    arith_affected_flags(tc['Memory']),
+                        'Flags':    data_move_flags(tc['Memory']),
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -291,7 +303,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc[Register.A],
-                        'Flags':    arith_affected_flags(tc[Register.A]),
+                        'Flags':    data_move_flags(tc[Register.A]),
                       },
         testcases   = {Register.A: [0x00, 0xAA, 0x42]},
     ),
@@ -302,7 +314,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.Y: tc[Register.A],
-                        'Flags':    arith_affected_flags(tc[Register.A]),
+                        'Flags':    data_move_flags(tc[Register.A]),
                       },
         testcases   = {Register.A: [0x00, 0xAA, 0x42]},
     ),
@@ -313,7 +325,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: tc[Register.SP],
-                        'Flags':    arith_affected_flags(tc[Register.SP]),
+                        'Flags':    data_move_flags(tc[Register.SP]),
                       },
         testcases   = {Register.SP: [0x00, 0xAA, 0x42]},
     ),
@@ -324,7 +336,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc[Register.X],
-                        'Flags':    arith_affected_flags(tc[Register.X]),
+                        'Flags':    data_move_flags(tc[Register.X]),
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42]},
     ),
@@ -335,7 +347,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.SP: tc[Register.X],
-                        'Flags':    arith_affected_flags(tc[Register.X]),
+                        'Flags':    data_move_flags(tc[Register.X]),
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42]},
     ),
@@ -346,7 +358,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A: tc[Register.Y],
-                        'Flags':    arith_affected_flags(tc[Register.Y]),
+                        'Flags':    data_move_flags(tc[Register.Y]),
                       },
         testcases   = {Register.Y: [0x00, 0xAA, 0x42]},
     ),
@@ -369,7 +381,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: {
                         Register.A:     tc['Stack'],
                         Register.SP:    tc[Register.SP] + 1,
-                        'Flags':        arith_affected_flags(tc['Stack']),
+                        'Flags':        data_move_flags(tc['Stack']),
                       },
         testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFC] },
     ),
@@ -407,7 +419,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         'Memory': dec_u8(tc['Memory']),
-                        'Flags':  arith_affected_flags(dec_u8(tc['Memory'])),
+                        'Flags':  data_move_flags(dec_u8(tc['Memory'])),
                       },
         testcases   = { 'Memory': [0x01, 0xAA, 0x42, 0x00] },
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -422,7 +434,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         'Memory': inc_u8(tc['Memory']),
-                        'Flags':  arith_affected_flags(inc_u8(tc['Memory'])),
+                        'Flags':  data_move_flags(inc_u8(tc['Memory'])),
                       },
         testcases   = { 'Memory': [0xFF, 0xAA, 0x42, 0x00] },
         tdatastrat  = TemplateDataStrat.FromTestcase,
@@ -434,7 +446,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: dec_u8(tc[Register.X]),
-                        'Flags': arith_affected_flags(dec_u8(tc[Register.X])),
+                        'Flags': data_move_flags(dec_u8(tc[Register.X])),
                       },
         testcases   = { Register.X: [0x00, 0xAA, 0x42, 0xFF] },
     ),
@@ -445,7 +457,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.Y: dec_u8(tc[Register.Y]),
-                        'Flags': arith_affected_flags(dec_u8(tc[Register.Y])),
+                        'Flags': data_move_flags(dec_u8(tc[Register.Y])),
                       },
         testcases   = { Register.Y: [0x00, 0xAA, 0x42, 0xFF] },
     ),
@@ -456,7 +468,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.X: inc_u8(tc[Register.X]),
-                        'Flags': arith_affected_flags(inc_u8(tc[Register.X])),
+                        'Flags': data_move_flags(inc_u8(tc[Register.X])),
                       },
         testcases   = { Register.X: [0x00, 0xAA, 0x42, 0xFF] },
     ),
@@ -467,9 +479,57 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.Y: inc_u8(tc[Register.Y]),
-                        'Flags': arith_affected_flags(inc_u8(tc[Register.Y])),
+                        'Flags': data_move_flags(inc_u8(tc[Register.Y])),
                       },
         testcases   = { Register.Y: [0x00, 0xAA, 0x42, 0xFF] },
+    ),
+    Instruction(
+        mnemonic    = 'ADC',
+        modes       = {
+                        AddressModeId.Immediate:    (0x69, 2),
+                        AddressModeId.Zeropage:     (0x65, 3),
+                        AddressModeId.ZeropageX:    (0x75, 4),
+                        AddressModeId.Absolute:     (0x6D, 4),
+                        AddressModeId.AbsoluteX:    (0x7D, 4),
+                        AddressModeId.AbsoluteY:    (0x79, 4),
+                        AddressModeId.IndirectX:    (0x61, 6),
+                        AddressModeId.IndirectY:    (0x71, 5),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {
+                          Register.A: v & 0xFF,
+                          'Flags': data_move_flags(v) |
+                                   flag_c(v) |
+                                   flag_v(tc[Register.A], tc['Memory'], tc[Register.P] & StatusFlags.C),
+                        })(tc[Register.A] + tc['Memory'] + ((tc[Register.P] & StatusFlags.C) != 0))
+                      ),
+        testcases   = { Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0x00, 0x01], Register.P: [StatusFlags.C, 0x00] },
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        xpagestall  = True,
+    ),
+    Instruction(
+        mnemonic    = 'SBC',
+        modes       = {
+                        AddressModeId.Immediate:    (0xE9, 2),
+                        AddressModeId.Zeropage:     (0xE5, 3),
+                        AddressModeId.ZeropageX:    (0xF5, 4),
+                        AddressModeId.Absolute:     (0xED, 4),
+                        AddressModeId.AbsoluteX:    (0xFD, 4),
+                        AddressModeId.AbsoluteY:    (0xF9, 4),
+                        AddressModeId.IndirectX:    (0xE1, 6),
+                        AddressModeId.IndirectY:    (0xF1, 5),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {
+                          Register.A: v & 0xFF,
+                          'Flags': data_move_flags(v) |
+                                   flag_c(v) |
+                                   flag_v(tc[Register.A], ~tc['Memory'] & 0xFF, tc[Register.P] & StatusFlags.C),
+                        })(tc[Register.A] + (~tc['Memory'] & 0xFF) + ((tc[Register.P] & StatusFlags.C) != 0))
+                      ),
+        testcases   = { Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0xFF, 0xFE], Register.P: [StatusFlags.C, 0x00] },
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        xpagestall  = True,
     ),
 ]
 

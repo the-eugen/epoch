@@ -39,6 +39,8 @@ enum mos6502_uop
     MOS_UOP_INC,
     MOS_UOP_INX,
     MOS_UOP_INY,
+    MOS_UOP_ADC,
+    MOS_UOP_SBC,
 };
 
 enum mos6502_addr_mode
@@ -238,6 +240,24 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0xFE, INC, MOS_AM_ABSX, 7, MOS_INSTR_RW),
     MOS_OP(0xE8, INX, MOS_AM_IMP,  2),
     MOS_OP(0xC8, INY, MOS_AM_IMP,  2),
+
+    MOS_OP(0x69, ADC, MOS_AM_IMM,  2),
+    MOS_OP(0x65, ADC, MOS_AM_Z,    3),
+    MOS_OP(0x75, ADC, MOS_AM_ZX,   4),
+    MOS_OP(0x6D, ADC, MOS_AM_ABS,  4),
+    MOS_OP(0x7D, ADC, MOS_AM_ABSX, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0x79, ADC, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0x61, ADC, MOS_AM_INDX, 6),
+    MOS_OP(0x71, ADC, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
+
+    MOS_OP(0xE9, SBC, MOS_AM_IMM,  2),
+    MOS_OP(0xE5, SBC, MOS_AM_Z,    3),
+    MOS_OP(0xF5, SBC, MOS_AM_ZX,   4),
+    MOS_OP(0xED, SBC, MOS_AM_ABS,  4),
+    MOS_OP(0xFD, SBC, MOS_AM_ABSX, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xF9, SBC, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xE1, SBC, MOS_AM_INDX, 6),
+    MOS_OP(0xF1, SBC, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -317,6 +337,20 @@ static inline bool instr_should_stall(struct mos6502_instr* instr, mos_pa_t base
 static inline void update_arith_flags(struct mos6502_cpu* cpu, mos_word_t val)
 {
     cpu->P |= (!val ? SR_Z : 0) | ((val & 0x80) ? SR_N : 0);
+}
+
+static void exec_addc(struct mos6502_cpu* cpu, mos_word_t mval)
+{
+    uint16_t val = cpu->A + mval + !!(cpu->P & SR_C);
+    uint8_t res = val & 0xFF;
+
+    /* SR_V is computed using the rule that signed overflow only occures when
+       A and M have the same sign and result has a different sign. */
+    cpu->P |= ((cpu->A ^ res) & (mval ^ res) & 0x80) ? SR_V : 0;
+    /* SR_C is an unsigned overflow */
+    cpu->P |= (val > 0xFF ? SR_C : 0);
+    cpu->A = res;
+    update_arith_flags(cpu, cpu->A);
 }
 
 static bool addr_mode_exec(struct mos6502_cpu* cpu)
@@ -628,6 +662,14 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_INY:
         cpu->Y = cpu->Y + 1;
         update_arith_flags(cpu, cpu->Y);
+        break;
+    case MOS_UOP_ADC:
+        assert(cpu->instr.address_latched);
+        exec_addc(cpu, load_word(cpu, cpu->AB));
+        break;
+    case MOS_UOP_SBC:
+        assert(cpu->instr.address_latched);
+        exec_addc(cpu, ~load_word(cpu, cpu->AB));
         break;
     default:
         ep_verify(false);
