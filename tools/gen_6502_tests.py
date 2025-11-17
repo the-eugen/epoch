@@ -531,6 +531,66 @@ instructions: list[Instruction] = [
         tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
+    Instruction(
+        mnemonic    = 'AND',
+        modes       = {
+                        AddressModeId.Immediate:    (0x29, 2),
+                        AddressModeId.Zeropage:     (0x25, 3),
+                        AddressModeId.ZeropageX:    (0x35, 4),
+                        AddressModeId.Absolute:     (0x2D, 4),
+                        AddressModeId.AbsoluteX:    (0x3D, 4),
+                        AddressModeId.AbsoluteY:    (0x39, 4),
+                        AddressModeId.IndirectX:    (0x21, 6),
+                        AddressModeId.IndirectY:    (0x31, 5),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {Register.A: v, 'Flags': data_move_flags(v)})
+                            (tc[Register.A] & tc['Memory'])
+                      ),
+        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        xpagestall  = True,
+    ),
+    Instruction(
+        mnemonic    = 'EOR',
+        modes       = {
+                        AddressModeId.Immediate:    (0x49, 2),
+                        AddressModeId.Zeropage:     (0x45, 3),
+                        AddressModeId.ZeropageX:    (0x55, 4),
+                        AddressModeId.Absolute:     (0x4D, 4),
+                        AddressModeId.AbsoluteX:    (0x5D, 4),
+                        AddressModeId.AbsoluteY:    (0x59, 4),
+                        AddressModeId.IndirectX:    (0x41, 6),
+                        AddressModeId.IndirectY:    (0x51, 5),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {Register.A: v, 'Flags': data_move_flags(v)})
+                            (tc[Register.A] ^ tc['Memory'])
+                      ),
+        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        xpagestall  = True,
+    ),
+    Instruction(
+        mnemonic    = 'ORA',
+        modes       = {
+                        AddressModeId.Immediate:    (0x09, 2),
+                        AddressModeId.Zeropage:     (0x05, 3),
+                        AddressModeId.ZeropageX:    (0x15, 4),
+                        AddressModeId.Absolute:     (0x0D, 4),
+                        AddressModeId.AbsoluteX:    (0x1D, 4),
+                        AddressModeId.AbsoluteY:    (0x19, 4),
+                        AddressModeId.IndirectX:    (0x01, 6),
+                        AddressModeId.IndirectY:    (0x11, 5),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {Register.A: v, 'Flags': data_move_flags(v)})
+                            (tc[Register.A] | tc['Memory'])
+                      ),
+        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        xpagestall  = True,
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");

@@ -41,6 +41,9 @@ enum mos6502_uop
     MOS_UOP_INY,
     MOS_UOP_ADC,
     MOS_UOP_SBC,
+    MOS_UOP_AND,
+    MOS_UOP_EOR,
+    MOS_UOP_ORA,
 };
 
 enum mos6502_addr_mode
@@ -258,6 +261,33 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0xF9, SBC, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
     MOS_OP(0xE1, SBC, MOS_AM_INDX, 6),
     MOS_OP(0xF1, SBC, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
+
+    MOS_OP(0x29, AND, MOS_AM_IMM,  2),
+    MOS_OP(0x25, AND, MOS_AM_Z,    3),
+    MOS_OP(0x35, AND, MOS_AM_ZX,   4),
+    MOS_OP(0x2D, AND, MOS_AM_ABS,  4),
+    MOS_OP(0x3D, AND, MOS_AM_ABSX, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0x39, AND, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0x21, AND, MOS_AM_INDX, 6),
+    MOS_OP(0x31, AND, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
+
+    MOS_OP(0x49, EOR, MOS_AM_IMM,  2),
+    MOS_OP(0x45, EOR, MOS_AM_Z,    3),
+    MOS_OP(0x55, EOR, MOS_AM_ZX,   4),
+    MOS_OP(0x4D, EOR, MOS_AM_ABS,  4),
+    MOS_OP(0x5D, EOR, MOS_AM_ABSX, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0x59, EOR, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0x41, EOR, MOS_AM_INDX, 6),
+    MOS_OP(0x51, EOR, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
+
+    MOS_OP(0x09, ORA, MOS_AM_IMM,  2),
+    MOS_OP(0x05, ORA, MOS_AM_Z,    3),
+    MOS_OP(0x15, ORA, MOS_AM_ZX,   4),
+    MOS_OP(0x0D, ORA, MOS_AM_ABS,  4),
+    MOS_OP(0x1D, ORA, MOS_AM_ABSX, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0x19, ORA, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0x01, ORA, MOS_AM_INDX, 6),
+    MOS_OP(0x11, ORA, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -334,7 +364,7 @@ static inline bool instr_should_stall(struct mos6502_instr* instr, mos_pa_t base
     return false;
 }
 
-static inline void update_arith_flags(struct mos6502_cpu* cpu, mos_word_t val)
+static inline void set_value_flags(struct mos6502_cpu* cpu, mos_word_t val)
 {
     cpu->P |= (!val ? SR_Z : 0) | ((val & 0x80) ? SR_N : 0);
 }
@@ -350,7 +380,7 @@ static void exec_addc(struct mos6502_cpu* cpu, mos_word_t mval)
     /* SR_C is an unsigned overflow */
     cpu->P |= (val > 0xFF ? SR_C : 0);
     cpu->A = res;
-    update_arith_flags(cpu, cpu->A);
+    set_value_flags(cpu, cpu->A);
 }
 
 static bool addr_mode_exec(struct mos6502_cpu* cpu)
@@ -508,17 +538,17 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_LDA:
         assert(cpu->instr.address_latched);
         cpu->A = load_word(cpu, cpu->AB);
-        update_arith_flags(cpu, cpu->A);
+        set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_LDX:
         assert(cpu->instr.address_latched);
         cpu->X = load_word(cpu, cpu->AB);
-        update_arith_flags(cpu, cpu->X);
+        set_value_flags(cpu, cpu->X);
         break;
     case MOS_UOP_LDY:
         assert(cpu->instr.address_latched);
         cpu->Y = load_word(cpu, cpu->AB);
-        update_arith_flags(cpu, cpu->Y);
+        set_value_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_STA:
         assert(cpu->instr.address_latched);
@@ -534,27 +564,27 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_UOP_TAX:
         cpu->X = cpu->A;
-        update_arith_flags(cpu, cpu->X);
+        set_value_flags(cpu, cpu->X);
         break;
     case MOS_UOP_TAY:
         cpu->Y = cpu->A;
-        update_arith_flags(cpu, cpu->Y);
+        set_value_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_TSX:
         cpu->X = cpu->SP;
-        update_arith_flags(cpu, cpu->X);
+        set_value_flags(cpu, cpu->X);
         break;
     case MOS_UOP_TXA:
         cpu->A = cpu->X;
-        update_arith_flags(cpu, cpu->A);
+        set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_TXS:
         cpu->SP = cpu->X;
-        update_arith_flags(cpu, cpu->SP);
+        set_value_flags(cpu, cpu->SP);
         break;
     case MOS_UOP_TYA:
         cpu->A = cpu->Y;
-        update_arith_flags(cpu, cpu->A);
+        set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_PHA:
         switch (cpu->instr.cycle) {
@@ -579,7 +609,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
             break;
         case 2:
             cpu->A = load_word(cpu, cpu->AB);
-            update_arith_flags(cpu, cpu->A);
+            set_value_flags(cpu, cpu->A);
             break;
         default:
             ep_verify(false);
@@ -624,7 +654,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
             break;
         case 1:
             store_word(cpu, cpu->AB, cpu->DB);
-            update_arith_flags(cpu, cpu->DB);
+            set_value_flags(cpu, cpu->DB);
             break;
         default:
             ep_verify(false);
@@ -641,7 +671,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
             break;
         case 1:
             store_word(cpu, cpu->AB, cpu->DB);
-            update_arith_flags(cpu, cpu->DB);
+            set_value_flags(cpu, cpu->DB);
             break;
         default:
             ep_verify(false);
@@ -649,19 +679,19 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_UOP_DEX:
         cpu->X = cpu->X - 1;
-        update_arith_flags(cpu, cpu->X);
+        set_value_flags(cpu, cpu->X);
         break;
     case MOS_UOP_INX:
         cpu->X = cpu->X + 1;
-        update_arith_flags(cpu, cpu->X);
+        set_value_flags(cpu, cpu->X);
         break;
     case MOS_UOP_DEY:
         cpu->Y = cpu->Y - 1;
-        update_arith_flags(cpu, cpu->Y);
+        set_value_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_INY:
         cpu->Y = cpu->Y + 1;
-        update_arith_flags(cpu, cpu->Y);
+        set_value_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_ADC:
         assert(cpu->instr.address_latched);
@@ -670,6 +700,21 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_SBC:
         assert(cpu->instr.address_latched);
         exec_addc(cpu, ~load_word(cpu, cpu->AB));
+        break;
+    case MOS_UOP_AND:
+        assert(cpu->instr.address_latched);
+        cpu->A &= load_word(cpu, cpu->AB);
+        set_value_flags(cpu, cpu->A);
+        break;
+    case MOS_UOP_EOR:
+        assert(cpu->instr.address_latched);
+        cpu->A ^= load_word(cpu, cpu->AB);
+        set_value_flags(cpu, cpu->A);
+        break;
+    case MOS_UOP_ORA:
+        assert(cpu->instr.address_latched);
+        cpu->A |= load_word(cpu, cpu->AB);
+        set_value_flags(cpu, cpu->A);
         break;
     default:
         ep_verify(false);
