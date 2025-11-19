@@ -44,6 +44,10 @@ enum mos6502_uop
     MOS_UOP_AND,
     MOS_UOP_EOR,
     MOS_UOP_ORA,
+    MOS_UOP_ASL,
+    MOS_UOP_LSR,
+    MOS_UOP_ROL,
+    MOS_UOP_ROR,
 };
 
 enum mos6502_addr_mode
@@ -288,6 +292,30 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0x19, ORA, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
     MOS_OP(0x01, ORA, MOS_AM_INDX, 6),
     MOS_OP(0x11, ORA, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
+
+    MOS_OP(0x0A, ASL, MOS_AM_IMP,  2),
+    MOS_OP(0x06, ASL, MOS_AM_Z,    5),
+    MOS_OP(0x16, ASL, MOS_AM_ZX,   6),
+    MOS_OP(0x0E, ASL, MOS_AM_ABS,  6),
+    MOS_OP(0x1E, ASL, MOS_AM_ABSX, 7, MOS_INSTR_RW),
+
+    MOS_OP(0x4A, LSR, MOS_AM_IMP,  2),
+    MOS_OP(0x46, LSR, MOS_AM_Z,    5),
+    MOS_OP(0x56, LSR, MOS_AM_ZX,   6),
+    MOS_OP(0x4E, LSR, MOS_AM_ABS,  6),
+    MOS_OP(0x5E, LSR, MOS_AM_ABSX, 7, MOS_INSTR_RW),
+
+    MOS_OP(0x2A, ROL, MOS_AM_IMP,  2),
+    MOS_OP(0x26, ROL, MOS_AM_Z,    5),
+    MOS_OP(0x36, ROL, MOS_AM_ZX,   6),
+    MOS_OP(0x2E, ROL, MOS_AM_ABS,  6),
+    MOS_OP(0x3E, ROL, MOS_AM_ABSX, 7, MOS_INSTR_RW),
+
+    MOS_OP(0x6A, ROR, MOS_AM_IMP,  2),
+    MOS_OP(0x66, ROR, MOS_AM_Z,    5),
+    MOS_OP(0x76, ROR, MOS_AM_ZX,   6),
+    MOS_OP(0x6E, ROR, MOS_AM_ABS,  6),
+    MOS_OP(0x7E, ROR, MOS_AM_ABSX, 7, MOS_INSTR_RW),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -715,6 +743,108 @@ static void uop_exec(struct mos6502_cpu* cpu)
         assert(cpu->instr.address_latched);
         cpu->A |= load_word(cpu, cpu->AB);
         set_value_flags(cpu, cpu->A);
+        break;
+    case MOS_UOP_ASL:
+        if (cpu->instr.mode == MOS_AM_IMP) {
+            cpu->P |= (cpu->A & 0x80 ? SR_C : 0);
+            cpu->A <<= 1;
+            set_value_flags(cpu, cpu->A);
+        } else {
+            assert(cpu->instr.address_latched);
+            switch (cpu->instr.ncycles - cpu->instr.cycle - 1) {
+            case 3:
+                cpu->DB = load_word(cpu, cpu->AB);
+                break;
+            case 2:
+                cpu->P |= (cpu->DB & 0x80 ? SR_C : 0);
+                cpu->DB <<= 1;
+                set_value_flags(cpu, cpu->DB);
+                break;
+            case 1:
+                store_word(cpu, cpu->AB, cpu->DB);
+                break;
+            default:
+                ep_verify(false);
+            }
+        }
+        break;
+    case MOS_UOP_LSR:
+        if (cpu->instr.mode == MOS_AM_IMP) {
+            cpu->P |= (cpu->A & 0x01 ? SR_C : 0);
+            cpu->A >>= 1;
+            set_value_flags(cpu, cpu->A);
+        } else {
+            assert(cpu->instr.address_latched);
+            switch (cpu->instr.ncycles - cpu->instr.cycle - 1) {
+            case 3:
+                cpu->DB = load_word(cpu, cpu->AB);
+                break;
+            case 2:
+                cpu->P |= (cpu->DB & 0x01 ? SR_C : 0);
+                cpu->DB >>= 1;
+                set_value_flags(cpu, cpu->DB);
+                break;
+            case 1:
+                store_word(cpu, cpu->AB, cpu->DB);
+                break;
+            default:
+                ep_verify(false);
+            }
+        }
+        break;
+    case MOS_UOP_ROL:
+        if (cpu->instr.mode == MOS_AM_IMP) {
+            bool carry = !!(cpu->P & SR_C);
+            cpu->P |= (cpu->A & 0x80 ? SR_C : 0);
+            cpu->A = (cpu->A << 1) | carry;
+            set_value_flags(cpu, cpu->A);
+        } else {
+            bool carry;
+            assert(cpu->instr.address_latched);
+            switch (cpu->instr.ncycles - cpu->instr.cycle - 1) {
+            case 3:
+                cpu->DB = load_word(cpu, cpu->AB);
+                break;
+            case 2:
+                carry = !!(cpu->P & SR_C);
+                cpu->P |= (cpu->DB & 0x80 ? SR_C : 0);
+                cpu->DB = (cpu->DB << 1) | carry;
+                set_value_flags(cpu, cpu->DB);
+                break;
+            case 1:
+                store_word(cpu, cpu->AB, cpu->DB);
+                break;
+            default:
+                ep_verify(false);
+            }
+        }
+        break;
+    case MOS_UOP_ROR:
+        if (cpu->instr.mode == MOS_AM_IMP) {
+            bool carry = !!(cpu->P & SR_C);
+            cpu->P |= (cpu->A & 0x01 ? SR_C : 0);
+            cpu->A = (cpu->A >> 1) | (carry << 7);
+            set_value_flags(cpu, cpu->A);
+        } else {
+            bool carry;
+            assert(cpu->instr.address_latched);
+            switch (cpu->instr.ncycles - cpu->instr.cycle - 1) {
+            case 3:
+                cpu->DB = load_word(cpu, cpu->AB);
+                break;
+            case 2:
+                carry = !!(cpu->P & SR_C);
+                cpu->P |= (cpu->DB & 0x01 ? SR_C : 0);
+                cpu->DB = (cpu->DB >> 1) | (carry << 7);
+                set_value_flags(cpu, cpu->DB);
+                break;
+            case 1:
+                store_word(cpu, cpu->AB, cpu->DB);
+                break;
+            default:
+                ep_verify(false);
+            }
+        }
         break;
     default:
         ep_verify(false);

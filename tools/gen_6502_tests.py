@@ -591,6 +591,110 @@ instructions: list[Instruction] = [
         tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
+    Instruction(
+        mnemonic    = 'ASLA', # ASL/accumulator
+        modes       = {
+                        AddressModeId.Implied:      (0x0A, 2),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {Register.A: v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc[Register.A] & 0x80) else 0)})
+                            ((tc[Register.A] << 1) & 0xFF)
+                      ),
+        testcases   = {Register.A: [0x80, 0xAA, 0x55]},
+    ),
+    Instruction(
+        mnemonic    = 'ASLM', # ASL/memory
+        modes       = {
+                        AddressModeId.Zeropage:     (0x06, 5),
+                        AddressModeId.ZeropageX:    (0x16, 6),
+                        AddressModeId.Absolute:     (0x0E, 6),
+                        AddressModeId.AbsoluteX:    (0x1E, 7),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {'Memory': v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc['Memory'] & 0x80) else 0)})
+                            ((tc['Memory'] << 1) & 0xFF)
+                      ),
+        testcases   = {'Memory': [0x80, 0xAA, 0x55]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+    ),
+    Instruction(
+        mnemonic    = 'LSRA', # LSR/accumulator
+        modes       = {
+                        AddressModeId.Implied:      (0x4A, 2),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {Register.A: v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc[Register.A] & 0x01) else 0)})
+                            ((tc[Register.A] >> 1) & 0xFF)
+                      ),
+        testcases   = {Register.A: [0x80, 0x01, 0x55]},
+    ),
+    Instruction(
+        mnemonic    = 'LSRM', # LSR/memory
+        modes       = {
+                        AddressModeId.Zeropage:     (0x46, 5),
+                        AddressModeId.ZeropageX:    (0x56, 6),
+                        AddressModeId.Absolute:     (0x4E, 6),
+                        AddressModeId.AbsoluteX:    (0x5E, 7),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {'Memory': v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc['Memory'] & 0x01) else 0)})
+                            ((tc['Memory'] >> 1) & 0xFF)
+                      ),
+        testcases   = {'Memory': [0x80, 0x01, 0x55]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+    ),
+    Instruction(
+        mnemonic    = 'ROLA', # ROL/accumulator
+        modes       = {
+                        AddressModeId.Implied:      (0x2A, 2),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {Register.A: v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc[Register.A] & 0x80) else 0)
+                        })(((tc[Register.A] << 1) & 0xFF) | (0x01 if (tc[Register.P] & StatusFlags.C) else 0))
+                      ),
+        testcases   = {Register.A: [0x80, 0x01, 0x55], Register.P: [StatusFlags.C, 0x00]},
+    ),
+    Instruction(
+        mnemonic    = 'ROLM', # LSR/memory
+        modes       = {
+                        AddressModeId.Zeropage:     (0x26, 5),
+                        AddressModeId.ZeropageX:    (0x36, 6),
+                        AddressModeId.Absolute:     (0x2E, 6),
+                        AddressModeId.AbsoluteX:    (0x3E, 7),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {'Memory': v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc['Memory'] & 0x80) else 0)
+                        })(((tc['Memory'] << 1) & 0xFF) | (0x01 if (tc[Register.P] & StatusFlags.C) else 0))
+                      ),
+        testcases   = {'Memory': [0x80, 0x01, 0x55], Register.P: [StatusFlags.C, 0x00]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+    ),
+    Instruction(
+        mnemonic    = 'RORA', # ROR/accumulator
+        modes       = {
+                        AddressModeId.Implied:      (0x6A, 2),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {Register.A: v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc[Register.A] & 0x01) else 0)
+                        })(((tc[Register.A] >> 1) & 0xFF) | (0x80 if (tc[Register.P] & StatusFlags.C) else 0))
+                      ),
+        testcases   = {Register.A: [0x80, 0x01, 0x55], Register.P: [StatusFlags.C, 0x00]},
+    ),
+    Instruction(
+        mnemonic    = 'RORM', # LSR/memory
+        modes       = {
+                        AddressModeId.Zeropage:     (0x66, 5),
+                        AddressModeId.ZeropageX:    (0x76, 6),
+                        AddressModeId.Absolute:     (0x6E, 6),
+                        AddressModeId.AbsoluteX:    (0x7E, 7),
+                      },
+        semantics   = lambda tc: (
+                        (lambda v: {'Memory': v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc['Memory'] & 0x01) else 0)
+                        })(((tc['Memory'] >> 1) & 0xFF) | (0x80 if (tc[Register.P] & StatusFlags.C) else 0))
+                      ),
+        testcases   = {'Memory': [0x80, 0x01, 0x55], Register.P: [StatusFlags.C, 0x00]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
