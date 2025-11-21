@@ -48,6 +48,13 @@ enum mos6502_uop
     MOS_UOP_LSR,
     MOS_UOP_ROL,
     MOS_UOP_ROR,
+    MOS_UOP_CLC,
+    MOS_UOP_CLD,
+    MOS_UOP_CLI,
+    MOS_UOP_CLV,
+    MOS_UOP_SEC,
+    MOS_UOP_SED,
+    MOS_UOP_SEI,
 };
 
 enum mos6502_addr_mode
@@ -316,6 +323,14 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0x76, ROR, MOS_AM_ZX,   6),
     MOS_OP(0x6E, ROR, MOS_AM_ABS,  6),
     MOS_OP(0x7E, ROR, MOS_AM_ABSX, 7, MOS_INSTR_RW),
+
+    MOS_OP(0x18, CLC, MOS_AM_IMP,  2),
+    MOS_OP(0xD8, CLD, MOS_AM_IMP,  2),
+    MOS_OP(0x58, CLI, MOS_AM_IMP,  2),
+    MOS_OP(0xB8, CLV, MOS_AM_IMP,  2),
+    MOS_OP(0x38, SEC, MOS_AM_IMP,  2),
+    MOS_OP(0xF8, SED, MOS_AM_IMP,  2),
+    MOS_OP(0x78, SEI, MOS_AM_IMP,  2),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -849,6 +864,29 @@ static void uop_exec(struct mos6502_cpu* cpu)
                 ep_verify(false);
             }
         }
+        break;
+    case MOS_UOP_CLC:
+        cpu->P &= ~SR_C;
+        break;
+    case MOS_UOP_CLD:
+        /* BCD is not supported */
+        ep_verify(false);
+        break;
+    case MOS_UOP_CLI:
+        cpu->P &= ~SR_I;
+        break;
+    case MOS_UOP_CLV:
+        cpu->P &= ~SR_V;
+        break;
+    case MOS_UOP_SEC:
+        cpu->P |= SR_C;
+        break;
+    case MOS_UOP_SED:
+        /* BCD is not supported */
+        ep_verify(false);
+        break;
+    case MOS_UOP_SEI:
+        cpu->P |= SR_I;
         break;
     default:
         ep_verify(false);

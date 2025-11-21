@@ -726,6 +726,41 @@ instructions: list[Instruction] = [
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
+    Instruction(
+        mnemonic    = 'CLC',
+        modes       = {AddressModeId.Implied: (0x18, 2)},
+        semantics   = lambda tc: ({'Flags': 0}),
+        flagmask    = StatusFlags.C,
+        testcases   = {'Flags': [StatusFlags.C, 0]},
+    ),
+    Instruction(
+        mnemonic    = 'CLI',
+        modes       = {AddressModeId.Implied: (0x58, 2)},
+        semantics   = lambda tc: ({'Flags': 0}),
+        flagmask    = StatusFlags.I,
+        testcases   = {'Flags': [StatusFlags.I, 0]},
+    ),
+    Instruction(
+        mnemonic    = 'CLV',
+        modes       = {AddressModeId.Implied: (0xB8, 2)},
+        semantics   = lambda tc: ({'Flags': 0}),
+        flagmask    = StatusFlags.V,
+        testcases   = {'Flags': [StatusFlags.V, 0]},
+    ),
+    Instruction(
+        mnemonic    = 'SEC',
+        modes       = {AddressModeId.Implied: (0x38, 2)},
+        semantics   = lambda tc: ({'Flags': StatusFlags.C}),
+        flagmask    = StatusFlags.C,
+        testcases   = {'Flags': [StatusFlags.C, 0]},
+    ),
+    Instruction(
+        mnemonic    = 'SEI',
+        modes       = {AddressModeId.Implied: (0x78, 2)},
+        semantics   = lambda tc: ({'Flags': StatusFlags.I}),
+        flagmask    = StatusFlags.I,
+        testcases   = {'Flags': [StatusFlags.I, 0]},
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
