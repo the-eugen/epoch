@@ -13,6 +13,7 @@ class StatusFlags(IntFlag):
     Z = 0x02
     C = 0x01
     V = 0x40
+    I = 0x04
 
 class Register(Enum):
     A = "A"
@@ -166,8 +167,9 @@ class Instruction:
     modes:      dict[AddressModeId, tuple[byte, int]] # mode -> (opcode, timing)
     testcases:  dict[Operand, [int]]
     semantics:  Semantics
-    tdatastrat: Optional[TemplateDataStrat] = TemplateDataStrat.Nop
-    xpagestall: Optional[bool] = False
+    flagmask:   int = 0
+    tdatastrat: TemplateDataStrat = TemplateDataStrat.Nop
+    xpagestall: bool = False
 
 # Used for load-type instructions where template data value is the testcase input
 def data_value_from_testcase(tc, exp): return tc["Memory"]
@@ -212,7 +214,8 @@ instructions: list[Instruction] = [
                         Register.X: tc['Memory'],
                         'Flags':    data_move_flags(tc['Memory']),
                       },
-        testcases   = {'Memory': [0x42, 0xAA, 0x00]},
+        testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
         tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
@@ -229,7 +232,8 @@ instructions: list[Instruction] = [
                         Register.Y: tc['Memory'],
                         'Flags':    data_move_flags(tc['Memory']),
                       },
-        testcases   = {'Memory': [0x42, 0xAA, 0x00]},
+        testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
         tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
@@ -249,7 +253,8 @@ instructions: list[Instruction] = [
                         Register.A: tc['Memory'],
                         'Flags':    data_move_flags(tc['Memory']),
                       },
-        testcases   = {'Memory': [0x42, 0xAA, 0x00]},
+        testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
         tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
@@ -305,7 +310,8 @@ instructions: list[Instruction] = [
                         Register.X: tc[Register.A],
                         'Flags':    data_move_flags(tc[Register.A]),
                       },
-        testcases   = {Register.A: [0x00, 0xAA, 0x42]},
+        testcases   = {Register.A: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'TAY',
@@ -316,7 +322,8 @@ instructions: list[Instruction] = [
                         Register.Y: tc[Register.A],
                         'Flags':    data_move_flags(tc[Register.A]),
                       },
-        testcases   = {Register.A: [0x00, 0xAA, 0x42]},
+        testcases   = {Register.A: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'TSX',
@@ -327,7 +334,8 @@ instructions: list[Instruction] = [
                         Register.X: tc[Register.SP],
                         'Flags':    data_move_flags(tc[Register.SP]),
                       },
-        testcases   = {Register.SP: [0x00, 0xAA, 0x42]},
+        testcases   = {Register.SP: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'TXA',
@@ -338,7 +346,8 @@ instructions: list[Instruction] = [
                         Register.A: tc[Register.X],
                         'Flags':    data_move_flags(tc[Register.X]),
                       },
-        testcases   = {Register.X: [0x00, 0xAA, 0x42]},
+        testcases   = {Register.X: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'TXS',
@@ -349,7 +358,8 @@ instructions: list[Instruction] = [
                         Register.SP: tc[Register.X],
                         'Flags':    data_move_flags(tc[Register.X]),
                       },
-        testcases   = {Register.X: [0x00, 0xAA, 0x42]},
+        testcases   = {Register.X: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'TYA',
@@ -360,7 +370,8 @@ instructions: list[Instruction] = [
                         Register.A: tc[Register.Y],
                         'Flags':    data_move_flags(tc[Register.Y]),
                       },
-        testcases   = {Register.Y: [0x00, 0xAA, 0x42]},
+        testcases   = {Register.Y: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'PHA',
@@ -383,7 +394,8 @@ instructions: list[Instruction] = [
                         Register.SP:    tc[Register.SP] + 1,
                         'Flags':        data_move_flags(tc['Stack']),
                       },
-        testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFC] },
+        testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFC], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'PHP',
@@ -403,11 +415,11 @@ instructions: list[Instruction] = [
                         AddressModeId.Implied:      (0x28, 4)
                       },
         semantics   = lambda tc: {
-                        # SP pulled from stack ignores bits 4 and 5
-                        'Flags':     (tc['Stack'] & ~0x30) | (tc[Register.P] & 0x30),
+                        'Flags':     tc['Stack'] & ~0x30,
                         Register.SP: tc[Register.SP] + 1,
                       },
-        testcases   = { 'Stack': [0xFF], Register.P: [0x16], Register.SP: [0xFC] },
+        testcases   = { 'Stack': [0xAA], 'Flags':[0x55], Register.SP: [0xFC] },
+        flagmask    = 0xFF & ~0x30, # PLP affects all flags except for bits 4 and 5
     ),
     Instruction(
         mnemonic    = 'DEC',
@@ -421,7 +433,8 @@ instructions: list[Instruction] = [
                         'Memory': dec_u8(tc['Memory']),
                         'Flags':  data_move_flags(dec_u8(tc['Memory'])),
                       },
-        testcases   = { 'Memory': [0x01, 0xAA, 0x42, 0x00] },
+        testcases   = {'Memory': [0x01, 0xAA, 0x42, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
         tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
@@ -436,7 +449,8 @@ instructions: list[Instruction] = [
                         'Memory': inc_u8(tc['Memory']),
                         'Flags':  data_move_flags(inc_u8(tc['Memory'])),
                       },
-        testcases   = { 'Memory': [0xFF, 0xAA, 0x42, 0x00] },
+        testcases   = {'Memory': [0xFF, 0xAA, 0x42, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
         tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
@@ -448,7 +462,8 @@ instructions: list[Instruction] = [
                         Register.X: dec_u8(tc[Register.X]),
                         'Flags': data_move_flags(dec_u8(tc[Register.X])),
                       },
-        testcases   = { Register.X: [0x00, 0xAA, 0x42, 0xFF] },
+        testcases   = {Register.X: [0x00, 0xAA, 0x42, 0xFF], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'DEY',
@@ -459,7 +474,8 @@ instructions: list[Instruction] = [
                         Register.Y: dec_u8(tc[Register.Y]),
                         'Flags': data_move_flags(dec_u8(tc[Register.Y])),
                       },
-        testcases   = { Register.Y: [0x00, 0xAA, 0x42, 0xFF] },
+        testcases   = {Register.Y: [0x00, 0xAA, 0x42, 0xFF], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'INX',
@@ -470,7 +486,8 @@ instructions: list[Instruction] = [
                         Register.X: inc_u8(tc[Register.X]),
                         'Flags': data_move_flags(inc_u8(tc[Register.X])),
                       },
-        testcases   = { Register.X: [0x00, 0xAA, 0x42, 0xFF] },
+        testcases   = {Register.X: [0x00, 0xAA, 0x42, 0xFF], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'INY',
@@ -481,7 +498,8 @@ instructions: list[Instruction] = [
                         Register.Y: inc_u8(tc[Register.Y]),
                         'Flags': data_move_flags(inc_u8(tc[Register.Y])),
                       },
-        testcases   = { Register.Y: [0x00, 0xAA, 0x42, 0xFF] },
+        testcases   = {Register.Y: [0x00, 0xAA, 0x42, 0xFF], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
         mnemonic    = 'ADC',
@@ -500,11 +518,12 @@ instructions: list[Instruction] = [
                           Register.A: v & 0xFF,
                           'Flags': data_move_flags(v) |
                                    flag_c(v) |
-                                   flag_v(tc[Register.A], tc['Memory'], tc[Register.P] & StatusFlags.C),
-                        })(tc[Register.A] + tc['Memory'] + ((tc[Register.P] & StatusFlags.C) != 0))
+                                   flag_v(tc[Register.A], tc['Memory'], tc['Flags'] & StatusFlags.C),
+                        })(tc[Register.A] + tc['Memory'] + ((tc['Flags'] & StatusFlags.C) != 0))
                       ),
-        testcases   = { Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0x00, 0x01], Register.P: [StatusFlags.C, 0x00] },
+        testcases   = {Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0x00, 0x01], 'Flags': [StatusFlags.C, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C | StatusFlags.V,
         xpagestall  = True,
     ),
     Instruction(
@@ -524,11 +543,12 @@ instructions: list[Instruction] = [
                           Register.A: v & 0xFF,
                           'Flags': data_move_flags(v) |
                                    flag_c(v) |
-                                   flag_v(tc[Register.A], ~tc['Memory'] & 0xFF, tc[Register.P] & StatusFlags.C),
-                        })(tc[Register.A] + (~tc['Memory'] & 0xFF) + ((tc[Register.P] & StatusFlags.C) != 0))
+                                   flag_v(tc[Register.A], ~tc['Memory'] & 0xFF, tc['Flags'] & StatusFlags.C),
+                        })(tc[Register.A] + (~tc['Memory'] & 0xFF) + ((tc['Flags'] & StatusFlags.C) != 0))
                       ),
-        testcases   = { Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0xFF, 0xFE], Register.P: [StatusFlags.C, 0x00] },
+        testcases   = {Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0xFF, 0xFE], 'Flags': [StatusFlags.C, 0x00]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C | StatusFlags.V,
         xpagestall  = True,
     ),
     Instruction(
@@ -547,8 +567,9 @@ instructions: list[Instruction] = [
                         (lambda v: {Register.A: v, 'Flags': data_move_flags(v)})
                             (tc[Register.A] & tc['Memory'])
                       ),
-        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01]},
+        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         tdatastrat  = TemplateDataStrat.FromTestcase,
+        flagmask    = StatusFlags.N | StatusFlags.Z,
         xpagestall  = True,
     ),
     Instruction(
@@ -567,7 +588,8 @@ instructions: list[Instruction] = [
                         (lambda v: {Register.A: v, 'Flags': data_move_flags(v)})
                             (tc[Register.A] ^ tc['Memory'])
                       ),
-        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01]},
+        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
         tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
@@ -587,7 +609,8 @@ instructions: list[Instruction] = [
                         (lambda v: {Register.A: v, 'Flags': data_move_flags(v)})
                             (tc[Register.A] | tc['Memory'])
                       ),
-        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01]},
+        testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        flagmask    = StatusFlags.N | StatusFlags.Z,
         tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
@@ -601,6 +624,7 @@ instructions: list[Instruction] = [
                             ((tc[Register.A] << 1) & 0xFF)
                       ),
         testcases   = {Register.A: [0x80, 0xAA, 0x55]},
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
     ),
     Instruction(
         mnemonic    = 'ASLM', # ASL/memory
@@ -614,7 +638,8 @@ instructions: list[Instruction] = [
                         (lambda v: {'Memory': v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc['Memory'] & 0x80) else 0)})
                             ((tc['Memory'] << 1) & 0xFF)
                       ),
-        testcases   = {'Memory': [0x80, 0xAA, 0x55]},
+        testcases   = {'Memory': [0x80, 0xAA, 0x55], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N | StatusFlags.C]},
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
@@ -626,7 +651,8 @@ instructions: list[Instruction] = [
                         (lambda v: {Register.A: v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc[Register.A] & 0x01) else 0)})
                             ((tc[Register.A] >> 1) & 0xFF)
                       ),
-        testcases   = {Register.A: [0x80, 0x01, 0x55]},
+        testcases   = {Register.A: [0x80, 0x01, 0x55], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N | StatusFlags.C]},
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
     ),
     Instruction(
         mnemonic    = 'LSRM', # LSR/memory
@@ -640,7 +666,8 @@ instructions: list[Instruction] = [
                         (lambda v: {'Memory': v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc['Memory'] & 0x01) else 0)})
                             ((tc['Memory'] >> 1) & 0xFF)
                       ),
-        testcases   = {'Memory': [0x80, 0x01, 0x55]},
+        testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N | StatusFlags.C]},
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
@@ -650,9 +677,10 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: (
                         (lambda v: {Register.A: v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc[Register.A] & 0x80) else 0)
-                        })(((tc[Register.A] << 1) & 0xFF) | (0x01 if (tc[Register.P] & StatusFlags.C) else 0))
+                        })(((tc[Register.A] << 1) & 0xFF) | (0x01 if (tc['Flags'] & StatusFlags.C) else 0))
                       ),
-        testcases   = {Register.A: [0x80, 0x01, 0x55], Register.P: [StatusFlags.C, 0x00]},
+        testcases   = {Register.A: [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
     ),
     Instruction(
         mnemonic    = 'ROLM', # LSR/memory
@@ -664,9 +692,10 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: (
                         (lambda v: {'Memory': v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc['Memory'] & 0x80) else 0)
-                        })(((tc['Memory'] << 1) & 0xFF) | (0x01 if (tc[Register.P] & StatusFlags.C) else 0))
+                        })(((tc['Memory'] << 1) & 0xFF) | (0x01 if (tc['Flags'] & StatusFlags.C) else 0))
                       ),
-        testcases   = {'Memory': [0x80, 0x01, 0x55], Register.P: [StatusFlags.C, 0x00]},
+        testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
@@ -676,9 +705,10 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: (
                         (lambda v: {Register.A: v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc[Register.A] & 0x01) else 0)
-                        })(((tc[Register.A] >> 1) & 0xFF) | (0x80 if (tc[Register.P] & StatusFlags.C) else 0))
+                        })(((tc[Register.A] >> 1) & 0xFF) | (0x80 if (tc['Flags'] & StatusFlags.C) else 0))
                       ),
-        testcases   = {Register.A: [0x80, 0x01, 0x55], Register.P: [StatusFlags.C, 0x00]},
+        testcases   = {Register.A: [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
     ),
     Instruction(
         mnemonic    = 'RORM', # LSR/memory
@@ -690,9 +720,10 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: (
                         (lambda v: {'Memory': v, 'Flags': data_move_flags(v) | (StatusFlags.C if (tc['Memory'] & 0x01) else 0)
-                        })(((tc['Memory'] >> 1) & 0xFF) | (0x80 if (tc[Register.P] & StatusFlags.C) else 0))
+                        })(((tc['Memory'] >> 1) & 0xFF) | (0x80 if (tc['Flags'] & StatusFlags.C) else 0))
                       ),
-        testcases   = {'Memory': [0x80, 0x01, 0x55], Register.P: [StatusFlags.C, 0x00]},
+        testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
 ]
@@ -743,6 +774,8 @@ def gen_instruction_tests(instr: Instruction) -> None:
                     elif key == 'Stack':
                         sp = testcase[Register.SP] + 1
                         print(f"    mos6502_store_word(&cpu, 0x0100 | 0x{sp:02x}, 0x{value:02x});")
+                    elif key == 'Flags':
+                        print(f"    cpu.P = (cpu.P & ~0x{instr.flagmask}) | 0x{value:02x};")
                     elif key != 'Memory':
                         raise ValueError("Invalid operand type")
 
@@ -760,25 +793,27 @@ def gen_instruction_tests(instr: Instruction) -> None:
                     print(f"    ep_verify_equal(cycles, {timing});")
 
                 # Validate the instr expected output
-                affected_flags = 0
                 for key, value in expected.items():
                     if isinstance(key, Register):
                         print(f"    ep_verify_equal(cpu.{key.value}, 0x{value:02x});")
                     elif key == 'Memory':
                         print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x{template.eaddr:04x}), 0x{value:02x});")
                     elif key == 'Flags':
-                        affected_flags = f"0x{value:02x}"
+                        print(f"    ep_verify_equal(cpu.P & 0x{instr.flagmask:02x}, 0x{value:02x});");
                     elif key == 'Stack':
                         print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x0100 | (cpu.SP + 1)), 0x{value:02x});")
                     else:
                         raise ValueError("Invalid output operand type")
 
+                # Instruction shouldn't've modified the flags that are not in its affected flags mask
+                print(f"    ep_verify_equal(cpu.P & ~0x{instr.flagmask:02x}, orig_flags & ~0x{instr.flagmask:02x});")
+
                 # If there are no affected flags we still check for unexpected modifications
-                if affected_flags != 0:
-                    print(f"    ep_verify_equal(cpu.P & {affected_flags}, {affected_flags});");
-                    print(f"    ep_verify_equal(cpu.P & ~{affected_flags}, orig_flags & ~{affected_flags});");
-                else:
-                    print(f"    ep_verify_equal(cpu.P, orig_flags);")
+                #if affected_flags != 0:
+                #    print(f"    ep_verify_equal(cpu.P & {affected_flags}, {affected_flags});");
+                #    print(f"    ep_verify_equal(cpu.P & ~{affected_flags}, orig_flags & ~{affected_flags});");
+                #else:
+                #    print(f"    ep_verify_equal(cpu.P, orig_flags);")
                 print()
 
                 print( "    free_test_cpu(&cpu);");

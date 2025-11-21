@@ -392,9 +392,14 @@ static inline bool instr_should_stall(struct mos6502_instr* instr, mos_pa_t base
     return false;
 }
 
+static inline void change_flags(struct mos6502_cpu* cpu, mos_word_t mask, mos_word_t val)
+{
+    cpu->P = (cpu->P & ~mask) | val;
+}
+
 static inline void set_value_flags(struct mos6502_cpu* cpu, mos_word_t val)
 {
-    cpu->P |= (!val ? SR_Z : 0) | ((val & 0x80) ? SR_N : 0);
+    change_flags(cpu, SR_Z | SR_N, (!val ? SR_Z : 0) | ((val & 0x80) ? SR_N : 0));
 }
 
 static void exec_addc(struct mos6502_cpu* cpu, mos_word_t mval)
@@ -404,11 +409,10 @@ static void exec_addc(struct mos6502_cpu* cpu, mos_word_t mval)
 
     /* SR_V is computed using the rule that signed overflow only occures when
        A and M have the same sign and result has a different sign. */
-    cpu->P |= ((cpu->A ^ res) & (mval ^ res) & 0x80) ? SR_V : 0;
-    /* SR_C is an unsigned overflow */
-    cpu->P |= (val > 0xFF ? SR_C : 0);
+    change_flags(cpu, SR_V, ((cpu->A ^ res) & (mval ^ res) & 0x80) ? SR_V : 0);
+    change_flags(cpu, SR_C, val > 0xFF ? SR_C : 0);
+    set_value_flags(cpu, res);
     cpu->A = res;
-    set_value_flags(cpu, cpu->A);
 }
 
 static bool addr_mode_exec(struct mos6502_cpu* cpu)
@@ -746,7 +750,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_UOP_ASL:
         if (cpu->instr.mode == MOS_AM_IMP) {
-            cpu->P |= (cpu->A & 0x80 ? SR_C : 0);
+            change_flags(cpu, SR_C, cpu->A & 0x80 ? SR_C : 0);
             cpu->A <<= 1;
             set_value_flags(cpu, cpu->A);
         } else {
@@ -756,7 +760,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
                 cpu->DB = load_word(cpu, cpu->AB);
                 break;
             case 2:
-                cpu->P |= (cpu->DB & 0x80 ? SR_C : 0);
+                change_flags(cpu, SR_C, cpu->DB & 0x80 ? SR_C : 0);
                 cpu->DB <<= 1;
                 set_value_flags(cpu, cpu->DB);
                 break;
@@ -770,7 +774,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_UOP_LSR:
         if (cpu->instr.mode == MOS_AM_IMP) {
-            cpu->P |= (cpu->A & 0x01 ? SR_C : 0);
+            change_flags(cpu, SR_C, cpu->A & 0x01 ? SR_C : 0);
             cpu->A >>= 1;
             set_value_flags(cpu, cpu->A);
         } else {
@@ -780,7 +784,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
                 cpu->DB = load_word(cpu, cpu->AB);
                 break;
             case 2:
-                cpu->P |= (cpu->DB & 0x01 ? SR_C : 0);
+                change_flags(cpu, SR_C, cpu->DB & 0x01 ? SR_C : 0);
                 cpu->DB >>= 1;
                 set_value_flags(cpu, cpu->DB);
                 break;
@@ -795,7 +799,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_ROL:
         if (cpu->instr.mode == MOS_AM_IMP) {
             bool carry = !!(cpu->P & SR_C);
-            cpu->P |= (cpu->A & 0x80 ? SR_C : 0);
+            change_flags(cpu, SR_C, cpu->A & 0x80 ? SR_C : 0);
             cpu->A = (cpu->A << 1) | carry;
             set_value_flags(cpu, cpu->A);
         } else {
@@ -807,7 +811,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
                 break;
             case 2:
                 carry = !!(cpu->P & SR_C);
-                cpu->P |= (cpu->DB & 0x80 ? SR_C : 0);
+                change_flags(cpu, SR_C, cpu->DB & 0x80 ? SR_C : 0);
                 cpu->DB = (cpu->DB << 1) | carry;
                 set_value_flags(cpu, cpu->DB);
                 break;
@@ -822,7 +826,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_ROR:
         if (cpu->instr.mode == MOS_AM_IMP) {
             bool carry = !!(cpu->P & SR_C);
-            cpu->P |= (cpu->A & 0x01 ? SR_C : 0);
+            change_flags(cpu, SR_C, cpu->A & 0x01 ? SR_C : 0);
             cpu->A = (cpu->A >> 1) | (carry << 7);
             set_value_flags(cpu, cpu->A);
         } else {
@@ -834,7 +838,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
                 break;
             case 2:
                 carry = !!(cpu->P & SR_C);
-                cpu->P |= (cpu->DB & 0x01 ? SR_C : 0);
+                change_flags(cpu, SR_C, cpu->DB & 0x01 ? SR_C : 0);
                 cpu->DB = (cpu->DB >> 1) | (carry << 7);
                 set_value_flags(cpu, cpu->DB);
                 break;

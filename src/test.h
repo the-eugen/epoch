@@ -29,16 +29,16 @@ extern ep_noreturn void _ep_test_fail(const char* fmt, ...);
 #define _ep_apply_fmt_spec(_fmtspec_, _val_, ...) \
     _Generic((_val_), \
         char:               _fmtspec_("%c", __VA_ARGS__), \
-        signed char:        _fmtspec_("%hhd", __VA_ARGS__), \
-        unsigned char:      _fmtspec_("%hhu", __VA_ARGS__), \
-        short:              _fmtspec_("%hd", __VA_ARGS__), \
-        unsigned short:     _fmtspec_("%hu", __VA_ARGS__), \
-        int:                _fmtspec_("%d", __VA_ARGS__), \
-        unsigned int:       _fmtspec_("%u", __VA_ARGS__), \
-        long:               _fmtspec_("%ld", __VA_ARGS__), \
-        unsigned long:      _fmtspec_("%lu", __VA_ARGS__), \
-        long long:          _fmtspec_("%lld", __VA_ARGS__), \
-        unsigned long long: _fmtspec_("%llu", __VA_ARGS__), \
+        signed char:        _fmtspec_("%#hhx", __VA_ARGS__), \
+        unsigned char:      _fmtspec_("%#hhx", __VA_ARGS__), \
+        short:              _fmtspec_("%#hx", __VA_ARGS__), \
+        unsigned short:     _fmtspec_("%#hx", __VA_ARGS__), \
+        int:                _fmtspec_("%#x", __VA_ARGS__), \
+        unsigned int:       _fmtspec_("%#x", __VA_ARGS__), \
+        long:               _fmtspec_("%#lx", __VA_ARGS__), \
+        unsigned long:      _fmtspec_("%#lx", __VA_ARGS__), \
+        long long:          _fmtspec_("%#llx", __VA_ARGS__), \
+        unsigned long long: _fmtspec_("%#llx", __VA_ARGS__), \
         float:              _fmtspec_("%f", __VA_ARGS__), \
         double:             _fmtspec_("%f", __VA_ARGS__), \
         long double:        _fmtspec_("%Lf", __VA_ARGS__), \
