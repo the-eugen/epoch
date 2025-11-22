@@ -55,6 +55,10 @@ enum mos6502_uop
     MOS_UOP_SEC,
     MOS_UOP_SED,
     MOS_UOP_SEI,
+    MOS_UOP_BIT,
+    MOS_UOP_CMP,
+    MOS_UOP_CPX,
+    MOS_UOP_CPY,
 };
 
 enum mos6502_addr_mode
@@ -331,6 +335,26 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0x38, SEC, MOS_AM_IMP,  2),
     MOS_OP(0xF8, SED, MOS_AM_IMP,  2),
     MOS_OP(0x78, SEI, MOS_AM_IMP,  2),
+
+    MOS_OP(0x24, BIT, MOS_AM_Z,    3),
+    MOS_OP(0x2C, BIT, MOS_AM_ABS,  4),
+
+    MOS_OP(0xC9, CMP, MOS_AM_IMM,  2),
+    MOS_OP(0xC5, CMP, MOS_AM_Z,    3),
+    MOS_OP(0xD5, CMP, MOS_AM_ZX,   4),
+    MOS_OP(0xCD, CMP, MOS_AM_ABS,  4),
+    MOS_OP(0xDD, CMP, MOS_AM_ABSX, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xD9, CMP, MOS_AM_ABSY, 4, MOS_INSTR_XPAGE_STALL),
+    MOS_OP(0xC1, CMP, MOS_AM_INDX, 6),
+    MOS_OP(0xD1, CMP, MOS_AM_INDY, 5, MOS_INSTR_XPAGE_STALL),
+
+    MOS_OP(0xE0, CPX, MOS_AM_IMM,  2),
+    MOS_OP(0xE4, CPX, MOS_AM_Z,    3),
+    MOS_OP(0xEC, CPX, MOS_AM_ABS,  4),
+
+    MOS_OP(0xC0, CPY, MOS_AM_IMM,  2),
+    MOS_OP(0xC4, CPY, MOS_AM_Z,    3),
+    MOS_OP(0xCC, CPY, MOS_AM_ABS,  4),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -417,7 +441,7 @@ static inline void set_value_flags(struct mos6502_cpu* cpu, mos_word_t val)
     change_flags(cpu, SR_Z | SR_N, (!val ? SR_Z : 0) | ((val & 0x80) ? SR_N : 0));
 }
 
-static void exec_addc(struct mos6502_cpu* cpu, mos_word_t mval)
+static void exec_addac(struct mos6502_cpu* cpu, mos_word_t mval)
 {
     uint16_t val = cpu->A + mval + !!(cpu->P & SR_C);
     uint8_t res = val & 0xFF;
@@ -428,6 +452,16 @@ static void exec_addc(struct mos6502_cpu* cpu, mos_word_t mval)
     change_flags(cpu, SR_C, val > 0xFF ? SR_C : 0);
     set_value_flags(cpu, res);
     cpu->A = res;
+}
+
+static mos_word_t exec_adda3(struct mos6502_cpu* cpu, mos_word_t val1, mos_word_t val2, mos_word_t val3)
+{
+    uint16_t val = val1 + val2 + val3;
+    uint8_t res = val & 0xFF;
+
+    change_flags(cpu, SR_C, val > 0xFF ? SR_C : 0);
+    set_value_flags(cpu, res);
+    return res;
 }
 
 static bool addr_mode_exec(struct mos6502_cpu* cpu)
@@ -742,11 +776,11 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_UOP_ADC:
         assert(cpu->instr.address_latched);
-        exec_addc(cpu, load_word(cpu, cpu->AB));
+        exec_addac(cpu, load_word(cpu, cpu->AB));
         break;
     case MOS_UOP_SBC:
         assert(cpu->instr.address_latched);
-        exec_addc(cpu, ~load_word(cpu, cpu->AB));
+        exec_addac(cpu, ~load_word(cpu, cpu->AB));
         break;
     case MOS_UOP_AND:
         assert(cpu->instr.address_latched);
@@ -887,6 +921,22 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_UOP_SEI:
         cpu->P |= SR_I;
+        break;
+    case MOS_UOP_BIT:
+        cpu->DB = load_word(cpu, cpu->AB);
+        change_flags(cpu, SR_N | SR_Z | SR_V, (cpu->DB == cpu->A ? SR_Z : 0) | (cpu->DB & 0xC0));
+        break;
+    case MOS_UOP_CMP:
+        cpu->DB = load_word(cpu, cpu->AB);
+        cpu->A = exec_adda3(cpu, cpu->A, ~cpu->DB, 1);
+        break;
+    case MOS_UOP_CPX:
+        cpu->DB = load_word(cpu, cpu->AB);
+        cpu->X = exec_adda3(cpu, cpu->X, ~cpu->DB, 1);
+        break;
+    case MOS_UOP_CPY:
+        cpu->DB = load_word(cpu, cpu->AB);
+        cpu->Y = exec_adda3(cpu, cpu->Y, ~cpu->DB, 1);
         break;
     default:
         ep_verify(false);

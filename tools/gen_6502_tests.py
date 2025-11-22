@@ -761,6 +761,75 @@ instructions: list[Instruction] = [
         flagmask    = StatusFlags.I,
         testcases   = {'Flags': [StatusFlags.I, 0]},
     ),
+    Instruction(
+        mnemonic    = 'BIT',
+        modes       = {
+                        AddressModeId.Zeropage: (0x24, 3),
+                        AddressModeId.Absolute: (0x2C, 4),
+                      },
+        semantics   = lambda tc: ({
+                        'Flags': (StatusFlags.Z if tc[Register.A] == tc['Memory'] else 0) | (tc['Memory'] & (StatusFlags.N | StatusFlags.V))
+                      }),
+        flagmask    = StatusFlags.N | StatusFlags.V | StatusFlags.Z,
+        testcases   = {Register.A:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+    ),
+    Instruction(
+        mnemonic    = 'CMP',
+        modes       = {
+                        AddressModeId.Immediate: (0xC9, 2),
+                        AddressModeId.Zeropage:  (0xC5, 3),
+                        AddressModeId.ZeropageX: (0xD5, 4),
+                        AddressModeId.Absolute:  (0xCD, 4),
+                        AddressModeId.AbsoluteX: (0xDD, 4),
+                        AddressModeId.AbsoluteY: (0xD9, 4),
+                        AddressModeId.IndirectX: (0xC1, 6),
+                        AddressModeId.IndirectY: (0xD1, 5),
+                      },
+        semantics   = lambda tc: ({
+                        'Flags': (StatusFlags.C if tc[Register.A] >= tc['Memory'] else 0) |
+                                 (StatusFlags.Z if tc[Register.A] == tc['Memory'] else 0) |
+                                 (StatusFlags.N if ((tc[Register.A] - tc['Memory']) & 0x80) else 0)
+                      }),
+        testcases   = {Register.A:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
+        xpagestall  = True,
+    ),
+    Instruction(
+        mnemonic    = 'CPX',
+        modes       = {
+                        AddressModeId.Immediate: (0xE0, 2),
+                        AddressModeId.Zeropage:  (0xE4, 3),
+                        AddressModeId.Absolute:  (0xEC, 4),
+                      },
+        semantics   = lambda tc: ({
+                        'Flags': (StatusFlags.C if tc[Register.X] >= tc['Memory'] else 0) |
+                                 (StatusFlags.Z if tc[Register.X] == tc['Memory'] else 0) |
+                                 (StatusFlags.N if ((tc[Register.X] - tc['Memory']) & 0x80) else 0)
+                      }),
+        testcases   = {Register.X:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
+        xpagestall  = True,
+    ),
+    Instruction(
+        mnemonic    = 'CPY',
+        modes       = {
+                        AddressModeId.Immediate: (0xC0, 2),
+                        AddressModeId.Zeropage:  (0xC4, 3),
+                        AddressModeId.Absolute:  (0xCC, 4),
+                      },
+        semantics   = lambda tc: ({
+                        'Flags': (StatusFlags.C if tc[Register.Y] >= tc['Memory'] else 0) |
+                                 (StatusFlags.Z if tc[Register.Y] == tc['Memory'] else 0) |
+                                 (StatusFlags.N if ((tc[Register.Y] - tc['Memory']) & 0x80) else 0)
+                      }),
+        testcases   = {Register.Y:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
+        xpagestall  = True,
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
