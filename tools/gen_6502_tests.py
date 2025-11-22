@@ -5,7 +5,7 @@ from pathlib import Path
 from textwrap import dedent
 from dataclasses import dataclass, field
 from enum import Enum, IntFlag, auto
-from typing import Union, TypeAlias, Literal, Callable
+from typing import Union, TypeAlias, Literal, Callable, ClassVar
 from itertools import product
 
 class StatusFlags(IntFlag):
@@ -21,6 +21,7 @@ class Register(Enum):
     Y = "Y"
     P = "P"
     SP = "SP"
+    PC = "PC"
 
 class AddressModeId(Enum):
     Implied     = "imp"
@@ -31,6 +32,7 @@ class AddressModeId(Enum):
     Absolute    = "abs"
     AbsoluteX   = "absx"
     AbsoluteY   = "absy"
+    Indirect    = "ind" # Only used for jumps
     IndirectX   = "indx"
     IndirectY   = "indy"
 
@@ -46,7 +48,7 @@ HLT_MARKER: byte = 0x02
 TemplateGen: TypeAlias = Callable[[int, int], list[CodeTemplate]]
 
 # Test code templates
-templates: dict[AddressModeId, TemplateGen] = {
+default_templates: dict[AddressModeId, TemplateGen] = {
     AddressModeId.Implied: lambda op, val: [
         CodeTemplate(
             segs    = [(0x0000, [op, HLT_MARKER])],
@@ -153,6 +155,20 @@ templates: dict[AddressModeId, TemplateGen] = {
     ],
 }
 
+jump_templates: dict[AddressModeId, TemplateGen] = {
+    AddressModeId.Absolute: lambda op, addr: [
+        CodeTemplate(
+            segs    = [(0x0000, [op, addr & 0xFF, (addr >> 8) & 0xFF, HLT_MARKER]), (addr, [HLT_MARKER])],
+        ),
+    ],
+    AddressModeId.Indirect: lambda op, addr: [
+        CodeTemplate(
+            segs    = [(0x0000, [op, 0x01, 0x10, HLT_MARKER]), (0x1001, [addr & 0xFF, (addr >> 8) & 0xFF]), (addr, [HLT_MARKER])],
+            eaddr   = 0x1001,
+        ),
+    ],
+}
+
 Operand: TypeAlias = Union[Register, Literal['Memory'], Literal['Flags'], Literal['Stack']]
 Semantics = Callable[dict[Operand, int], dict[Operand, int]]
 
@@ -170,6 +186,11 @@ class Instruction:
     flagmask:   int = 0
     tdatastrat: TemplateDataStrat = TemplateDataStrat.Nop
     xpagestall: bool = False
+    templates:  dict[AddressModeId, TemplateGen] = None
+
+    def __post_init__(self):
+        if self.templates is None:
+            self.templates = default_templates
 
 # Used for load-type instructions where template data value is the testcase input
 def data_value_from_testcase(tc, exp): return tc["Memory"]
@@ -830,6 +851,19 @@ instructions: list[Instruction] = [
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         xpagestall  = True,
     ),
+    Instruction(
+        mnemonic    = 'JMP',
+        modes       = {
+                        AddressModeId.Absolute: (0x4C, 3),
+                        AddressModeId.Indirect: (0x6C, 5),
+                      },
+        semantics   = lambda tc: ({
+                        Register.PC: tc['Memory'] + 1
+                      }),
+        testcases   = {'Memory':[0x2001]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        templates   = jump_templates,
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
@@ -851,7 +885,7 @@ def gen_instruction_tests(instr: Instruction) -> None:
             elif instr.tdatastrat == TemplateDataStrat.Nop:
                 data_val = 0
 
-            gen_templates = templates[mode]
+            gen_templates = instr.templates[mode]
             for template in gen_templates(opcode, data_val):
 
                 template_tag = f"_{template.tag}" if template.tag else ""
@@ -911,13 +945,6 @@ def gen_instruction_tests(instr: Instruction) -> None:
 
                 # Instruction shouldn't've modified the flags that are not in its affected flags mask
                 print(f"    ep_verify_equal(cpu.P & ~0x{instr.flagmask:02x}, orig_flags & ~0x{instr.flagmask:02x});")
-
-                # If there are no affected flags we still check for unexpected modifications
-                #if affected_flags != 0:
-                #    print(f"    ep_verify_equal(cpu.P & {affected_flags}, {affected_flags});");
-                #    print(f"    ep_verify_equal(cpu.P & ~{affected_flags}, orig_flags & ~{affected_flags});");
-                #else:
-                #    print(f"    ep_verify_equal(cpu.P, orig_flags);")
                 print()
 
                 print( "    free_test_cpu(&cpu);");

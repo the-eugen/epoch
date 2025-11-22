@@ -59,6 +59,7 @@ enum mos6502_uop
     MOS_UOP_CMP,
     MOS_UOP_CPX,
     MOS_UOP_CPY,
+    MOS_UOP_JMP,
 };
 
 enum mos6502_addr_mode
@@ -71,6 +72,7 @@ enum mos6502_addr_mode
     MOS_AM_ABS,
     MOS_AM_ABSX,
     MOS_AM_ABSY,
+    MOS_AM_IND,
     MOS_AM_INDX,
     MOS_AM_INDY,
 };
@@ -98,10 +100,13 @@ struct mos6502_instr
         #define MOS_INSTR_XPAGE_STALL   (1u << 1)
         /* This is a write instruction and will take an extra cycle */
         #define MOS_INSTR_RW  (1u << 2)
+        /* This is a jump instruction */
+        #define MOS_INSTR_JUMP (1u << 3)
         struct {
             uint8_t address_latched:1;
             uint8_t xpage_stall:1;
             uint8_t always_stall:1;
+            uint8_t is_jump:1;
             uint8_t _unused:5;
         };
     };
@@ -355,6 +360,9 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0xC0, CPY, MOS_AM_IMM,  2),
     MOS_OP(0xC4, CPY, MOS_AM_Z,    3),
     MOS_OP(0xCC, CPY, MOS_AM_ABS,  4),
+
+    MOS_OP(0x4C, JMP, MOS_AM_ABS,  3, MOS_INSTR_JUMP),
+    MOS_OP(0x6C, JMP, MOS_AM_IND,  5, MOS_INSTR_JUMP),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -402,6 +410,12 @@ static struct mos6502_instr fetch_next_instr(struct mos6502_cpu* cpu)
 {
     /* TODO: unimplemented instruction exception? */
     return mos_opcodes[load_word(cpu, cpu->PC++)];
+}
+
+static struct mos6502_instr fetch_next_instr_from(struct mos6502_cpu* cpu, mos_pa_t pc)
+{
+    cpu->PC = pc;
+    return fetch_next_instr(cpu);
 }
 
 static void latch_address(struct mos6502_cpu* cpu, mos_pa_t addr)
@@ -594,6 +608,25 @@ static bool addr_mode_exec(struct mos6502_cpu* cpu)
             /* fallthru */
         case 3: /* delay cycle */
             latch_address(cpu, cpu->AB + cpu->Y);
+            break;
+        default:
+            ep_verify(false);
+        }
+        break;
+    case MOS_AM_IND:
+        switch (cpu->instr.cycle) {
+        case 0:
+            cpu->DB = load_word(cpu, cpu->PC++);
+            break;
+        case 1:
+            cpu->AB = (load_word(cpu, cpu->PC++) << 8) | cpu->DB;
+            break;
+        case 2:
+            cpu->DB = load_word(cpu, cpu->AB++);
+            break;
+        case 3:
+            cpu->AB = (load_word(cpu, cpu->AB) << 8) | cpu->DB;
+            latch_address(cpu, cpu->AB);
             break;
         default:
             ep_verify(false);
@@ -1042,7 +1075,11 @@ bool mos6502_tick(struct mos6502_cpu* cpu)
 
     ep_verify(instr_is_tplus(cpu->instr));
     if (!cpu->halted) {
-        cpu->instr = fetch_next_instr(cpu);
+        if (cpu->instr.is_jump) {
+            cpu->instr = fetch_next_instr_from(cpu, cpu->AB);
+        } else {
+            cpu->instr = fetch_next_instr(cpu);
+        }
     }
 
 retire:
