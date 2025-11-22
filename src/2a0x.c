@@ -1167,13 +1167,11 @@ static void free_test_cpu(struct mos6502_cpu* cpu)
 
 static uint64_t run_test_cpu(struct mos6502_cpu* cpu)
 {
-    /* We expect each test to terminate with a HLT */
     uint64_t cycles = cpu->cycle;
-    while (!mos6502_is_halted(cpu)) {
-        mos6502_tick(cpu);
+    while (!mos6502_tick(cpu)) {
+        /* Run 1 instruction */
     }
 
-    /* Subtract 1 cycle for the HLT */
     return (cpu->cycle - cycles);
 }
 
@@ -1240,12 +1238,12 @@ ep_test(test_hlt)
 ep_test(test_nop)
 {
     struct mos6502_cpu cpu;
-    struct test_ram_segment segment = MAKE_TEST_SEGMENT_VEC(0x0, {0xea, 0x02});
+    struct test_ram_segment segment = MAKE_TEST_SEGMENT_VEC(0x0, {0xea});
     init_test_cpu(&cpu, &segment, 1);
 
-    uint64_t cycles = run_test_cpu(&cpu) - 1;
+    uint64_t cycles = run_test_cpu(&cpu);
     ep_verify_equal(cycles, 2);
-    ep_verify_equal(cpu.total_retired, 2);
+    ep_verify_equal(cpu.total_retired, 1);
 
     free_test_cpu(&cpu);
 }

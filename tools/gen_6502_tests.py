@@ -44,69 +44,68 @@ class CodeTemplate:
     eaddr: Optional[int] = None
     xpage: Optional[bool] = False
 
-HLT_MARKER: byte = 0x02
 TemplateGen: TypeAlias = Callable[[int, int], list[CodeTemplate]]
 
 # Test code templates
 default_templates: dict[AddressModeId, TemplateGen] = {
     AddressModeId.Implied: lambda op, val: [
         CodeTemplate(
-            segs    = [(0x0000, [op, HLT_MARKER])],
+            segs    = [(0x0000, [op])],
         ),
     ],
     AddressModeId.Immediate: lambda op, val: [
         CodeTemplate(
-            segs    = [(0x0000, [op, val, HLT_MARKER])],
+            segs    = [(0x0000, [op, val])],
             eaddr   = 0x0001,
         ),
     ],
     AddressModeId.Zeropage: lambda op, val: [
         CodeTemplate(
-            segs    = [(0x0000, [op, 0x03, HLT_MARKER, val])],
-            eaddr   = 0x0003,
+            segs    = [(0x0000, [op, 0x02, val])],
+            eaddr   = 0x0002,
         ),
     ],
     AddressModeId.ZeropageX: lambda op, val: [
         CodeTemplate(
             state   = {Register.X: 0x01},
-            segs    = [(0x0000, [op, 0x02, HLT_MARKER, val])],
-            eaddr   = 0x0003,
+            segs    = [(0x0000, [op, 0x01, val])],
+            eaddr   = 0x0002,
         ),
         CodeTemplate(
-            state   = {Register.X: 0x04},
-            segs    = [(0x0000, [op, 0xff, HLT_MARKER, val])],
+            state   = {Register.X: 0x03},
+            segs    = [(0x0000, [op, 0xff, val])],
             tag     = "overflow",
-            eaddr   = 0x0003,
+            eaddr   = 0x0002,
         ),
     ],
     AddressModeId.ZeropageY: lambda op, val: [
         CodeTemplate(
             state   = {Register.Y: 0x01},
-            segs    = [(0x0000, [op, 0x02, HLT_MARKER, val])],
-            eaddr   = 0x0003,
+            segs    = [(0x0000, [op, 0x01, val])],
+            eaddr   = 0x0002,
         ),
         CodeTemplate(
-            state   = {Register.Y: 0x04},
-            segs    = [(0x0000, [op, 0xff, HLT_MARKER, val])],
+            state   = {Register.Y: 0x03},
+            segs    = [(0x0000, [op, 0xff, val])],
             tag     = "overflow",
-            eaddr   = 0x0003,
+            eaddr   = 0x0002,
         ),
     ],
     AddressModeId.Absolute: lambda op, val: [
         CodeTemplate(
-            segs    = [(0x0000, [op, 0x01, 0x10, HLT_MARKER]), (0x1001, [val])],
+            segs    = [(0x0000, [op, 0x01, 0x10]), (0x1001, [val])],
             eaddr   = 0x1001,
         ),
     ],
     AddressModeId.AbsoluteX: lambda op, val: [
         CodeTemplate(
             state   = {Register.X: 0x01},
-            segs    = [(0x0000, [op, 0x00, 0x10, HLT_MARKER]), (0x1001, [val])],
+            segs    = [(0x0000, [op, 0x00, 0x10]), (0x1001, [val])],
             eaddr   = 0x1001,
         ),
         CodeTemplate(
             state   = {Register.X: 0x02},
-            segs    = [(0x0000, [op, 0xFF, 0x0F, HLT_MARKER]), (0x1001, [val])],
+            segs    = [(0x0000, [op, 0xFF, 0x0F]), (0x1001, [val])],
             tag     = "xpage",
             eaddr   = 0x1001,
             xpage   = True,
@@ -115,12 +114,12 @@ default_templates: dict[AddressModeId, TemplateGen] = {
     AddressModeId.AbsoluteY: lambda op, val: [
         CodeTemplate(
             state   = {Register.Y: 0x01},
-            segs    = [(0x0000, [op, 0x00, 0x10, HLT_MARKER]), (0x1001, [val])],
+            segs    = [(0x0000, [op, 0x00, 0x10]), (0x1001, [val])],
             eaddr   = 0x1001,
         ),
         CodeTemplate(
             state   = {Register.Y:0x02},
-            segs    = [(0x0000, [op, 0xFF, 0x0F, HLT_MARKER]), (0x1001, [val])],
+            segs    = [(0x0000, [op, 0xFF, 0x0F]), (0x1001, [val])],
             tag     = "xpage",
             eaddr   = 0x1001,
             xpage   = True,
@@ -129,12 +128,12 @@ default_templates: dict[AddressModeId, TemplateGen] = {
     AddressModeId.IndirectX: lambda op, val: [
         CodeTemplate(
             state   = {Register.X: 0x01},
-            segs    = [(0x0000, [op, 0x02, HLT_MARKER, 0x80]), (0x0080, [val])],
+            segs    = [(0x0000, [op, 0x01, 0x80]), (0x0080, [val])],
             eaddr   = 0x0080,
         ),
         CodeTemplate(
-            state   = {Register.X: 0x04},
-            segs    = [(0x0000, [op, 0xFF, HLT_MARKER, 0x80]), (0x0080, [val])],
+            state   = {Register.X: 0x03},
+            segs    = [(0x0000, [op, 0xFF, 0x80]), (0x0080, [val])],
             tag     = "overflow",
             eaddr   = 0x0080,
         ),
@@ -142,12 +141,12 @@ default_templates: dict[AddressModeId, TemplateGen] = {
     AddressModeId.IndirectY: lambda op, val: [
         CodeTemplate(
             state   = {Register.Y: 0x04},
-            segs    = [(0x0000, [op, 0x03, HLT_MARKER, 0x80, 0x10]), (0x1084, [val])],
+            segs    = [(0x0000, [op, 0x02, 0x80, 0x10]), (0x1084, [val])],
             eaddr   = 0x1084,
         ),
         CodeTemplate(
             state   = {Register.Y: 0x80},
-            segs    = [(0x0000, [op, 0x03, HLT_MARKER, 0x80, 0x10]), (0x1100, [val])],
+            segs    = [(0x0000, [op, 0x02, 0x80, 0x10]), (0x1100, [val])],
             tag     = "xpage",
             eaddr   = 0x1100,
             xpage   = True,
@@ -158,12 +157,12 @@ default_templates: dict[AddressModeId, TemplateGen] = {
 jump_templates: dict[AddressModeId, TemplateGen] = {
     AddressModeId.Absolute: lambda op, addr: [
         CodeTemplate(
-            segs    = [(0x0000, [op, addr & 0xFF, (addr >> 8) & 0xFF, HLT_MARKER]), (addr, [HLT_MARKER])],
+            segs    = [(0x0000, [op, addr & 0xFF, (addr >> 8) & 0xFF]), (addr, [0x00])],
         ),
     ],
     AddressModeId.Indirect: lambda op, addr: [
         CodeTemplate(
-            segs    = [(0x0000, [op, 0x01, 0x10, HLT_MARKER]), (0x1001, [addr & 0xFF, (addr >> 8) & 0xFF]), (addr, [HLT_MARKER])],
+            segs    = [(0x0000, [op, 0x01, 0x10]), (0x1001, [addr & 0xFF, (addr >> 8) & 0xFF]), (addr, [0x00])],
             eaddr   = 0x1001,
         ),
     ],
@@ -922,13 +921,14 @@ def gen_instruction_tests(instr: Instruction) -> None:
                         print(f"    cpu.{reg.value} = 0x{val:02x};");
 
                 print(f"    mos_word_t orig_flags = cpu.P;");
-                print(f"    uint64_t cycles = run_test_cpu(&cpu) - 1 /* Subtract 1 cycle for HLT */;");
+                print(f"    uint64_t cycles = run_test_cpu(&cpu);");
                 print()
 
                 if instr.xpagestall and template.xpage:
                     print(f"    ep_verify_equal(cycles, {timing} + 1);")
                 else:
                     print(f"    ep_verify_equal(cycles, {timing});")
+                print(f"    ep_verify_equal(cpu.total_retired, 1);");
 
                 # Validate the instr expected output
                 for key, value in expected.items():
