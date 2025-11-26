@@ -35,6 +35,7 @@ class AddressModeId(Enum):
     Indirect    = "ind" # Only used for jumps
     IndirectX   = "indx"
     IndirectY   = "indy"
+    Relative    = "rel"
 
 @dataclass
 class CodeTemplate:
@@ -163,6 +164,12 @@ jump_templates: dict[AddressModeId, TemplateGen] = {
     AddressModeId.Indirect: lambda op, addr: [
         CodeTemplate(
             segs    = [(0x0000, [op, 0x01, 0x10]), (0x1001, [addr & 0xFF, (addr >> 8) & 0xFF]), (addr, [0x00])],
+            eaddr   = 0x1001,
+        ),
+    ],
+    AddressModeId.Relative: lambda op, offset: [
+        CodeTemplate(
+            segs    = [(0x0000, [op, offset & 0xFF]), ((offset & 0xFF) + 3, [0x00])],
             eaddr   = 0x1001,
         ),
     ],
@@ -863,6 +870,34 @@ instructions: list[Instruction] = [
         tdatastrat  = TemplateDataStrat.FromTestcase,
         templates   = jump_templates,
     ),
+    Instruction(
+        mnemonic    = 'BCC',
+        modes       = {AddressModeId.Relative: (0x90, 2)},
+        semantics   = lambda tc: (
+                        (lambda dstaddr, baseaddr: {
+                            Register.PC: dstaddr,
+                            'Cycles': 2 if (tc['Flags'] & StatusFlags.C) else
+                                        3 if (dstaddr & 0xFF00) == (baseaddr & 0xFF00) else 4,
+                        })((tc['Memory'] if not (tc['Flags'] & StatusFlags.C) else 0) + 2 + 1, 0x0001)
+                      ),
+        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.C]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        templates   = jump_templates,
+    ),
+    Instruction(
+        mnemonic    = 'BCS',
+        modes       = {AddressModeId.Relative: (0xB0, 2)},
+        semantics   = lambda tc: (
+                        (lambda dstaddr, baseaddr: {
+                            Register.PC: dstaddr,
+                            'Cycles': 2 if not (tc['Flags'] & StatusFlags.C) else
+                                        3 if (dstaddr & 0xFF00) == (baseaddr & 0xFF00) else 4,
+                        })((tc['Memory'] if (tc['Flags'] & StatusFlags.C) else 0) + 2 + 1, 0x0001)
+                      ),
+        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.C]},
+        tdatastrat  = TemplateDataStrat.FromTestcase,
+        templates   = jump_templates,
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
@@ -924,10 +959,12 @@ def gen_instruction_tests(instr: Instruction) -> None:
                 print(f"    uint64_t cycles = run_test_cpu(&cpu);");
                 print()
 
-                if instr.xpagestall and template.xpage:
-                    print(f"    ep_verify_equal(cycles, {timing} + 1);")
+                if expected.get('Cycles'):
+                    effective_cycles = expected['Cycles'];
                 else:
-                    print(f"    ep_verify_equal(cycles, {timing});")
+                    effective_cycles = timing + (1 if instr.xpagestall and template.xpage else 0)
+
+                print(f"    ep_verify_equal(cycles, {effective_cycles});")
                 print(f"    ep_verify_equal(cpu.total_retired, 1);");
 
                 # Validate the instr expected output
@@ -940,7 +977,7 @@ def gen_instruction_tests(instr: Instruction) -> None:
                         print(f"    ep_verify_equal(cpu.P & 0x{instr.flagmask:02x}, 0x{value:02x});");
                     elif key == 'Stack':
                         print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x0100 | (cpu.SP + 1)), 0x{value:02x});")
-                    else:
+                    elif key != 'Cycles':
                         raise ValueError("Invalid output operand type")
 
                 # Instruction shouldn't've modified the flags that are not in its affected flags mask
