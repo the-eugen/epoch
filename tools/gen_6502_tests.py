@@ -220,6 +220,19 @@ def inc_u8(v: byte): return (v + 1) & 0xFF;
 
 def data_move_flags(v: int): return flag_z(v) | flag_n(v)
 
+def branch_semantics(predicate):
+    def semantics(tc):
+        baseaddr = 0x0001
+        destaddr = (tc['Memory'] if predicate(tc) else 0) + 3
+        timing = 2 if not predicate(tc) else 3 if (destaddr & 0xFF00) == (baseaddr & 0xFF00) else 4
+
+        return {
+            Register.PC: destaddr,
+            'Cycles':    timing,
+        }
+
+    return semantics
+
 instructions: list[Instruction] = [
     Instruction(
         mnemonic    = 'LDX',
@@ -844,27 +857,57 @@ instructions: list[Instruction] = [
     Instruction(
         mnemonic    = 'BCC',
         modes       = {AddressModeId.Relative: (0x90, 2)},
-        semantics   = lambda tc: (
-                        (lambda dstaddr, baseaddr: {
-                            Register.PC: dstaddr,
-                            'Cycles': 2 if (tc['Flags'] & StatusFlags.C) else
-                                        3 if (dstaddr & 0xFF00) == (baseaddr & 0xFF00) else 4,
-                        })((tc['Memory'] if not (tc['Flags'] & StatusFlags.C) else 0) + 2 + 1, 0x0001)
-                      ),
+        semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.C)),
         testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.C]},
         templates   = jump_templates,
     ),
     Instruction(
         mnemonic    = 'BCS',
         modes       = {AddressModeId.Relative: (0xB0, 2)},
-        semantics   = lambda tc: (
-                        (lambda dstaddr, baseaddr: {
-                            Register.PC: dstaddr,
-                            'Cycles': 2 if not (tc['Flags'] & StatusFlags.C) else
-                                        3 if (dstaddr & 0xFF00) == (baseaddr & 0xFF00) else 4,
-                        })((tc['Memory'] if (tc['Flags'] & StatusFlags.C) else 0) + 2 + 1, 0x0001)
-                      ),
+        semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.C)),
         testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.C]},
+        templates   = jump_templates,
+    ),
+    Instruction(
+        mnemonic    = 'BNE',
+        modes       = {AddressModeId.Relative: (0xD0, 2)},
+        semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.Z)),
+        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.Z]},
+        templates   = jump_templates,
+    ),
+    Instruction(
+        mnemonic    = 'BEQ',
+        modes       = {AddressModeId.Relative: (0xF0, 2)},
+        semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.Z)),
+        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.Z]},
+        templates   = jump_templates,
+    ),
+    Instruction(
+        mnemonic    = 'BPL',
+        modes       = {AddressModeId.Relative: (0x10, 2)},
+        semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.N)),
+        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.N]},
+        templates   = jump_templates,
+    ),
+    Instruction(
+        mnemonic    = 'BMI',
+        modes       = {AddressModeId.Relative: (0x30, 2)},
+        semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.N)),
+        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.N]},
+        templates   = jump_templates,
+    ),
+    Instruction(
+        mnemonic    = 'BVC',
+        modes       = {AddressModeId.Relative: (0x50, 2)},
+        semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.V)),
+        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.V]},
+        templates   = jump_templates,
+    ),
+    Instruction(
+        mnemonic    = 'BVS',
+        modes       = {AddressModeId.Relative: (0x70, 2)},
+        semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.V)),
+        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.V]},
         templates   = jump_templates,
     ),
 ]

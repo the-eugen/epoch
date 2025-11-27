@@ -62,6 +62,12 @@ enum mos6502_uop
     MOS_UOP_JMP,
     MOS_UOP_BCC,
     MOS_UOP_BCS,
+    MOS_UOP_BEQ,
+    MOS_UOP_BMI,
+    MOS_UOP_BNE,
+    MOS_UOP_BPL,
+    MOS_UOP_BVC,
+    MOS_UOP_BVS,
 };
 
 enum mos6502_addr_mode
@@ -369,6 +375,12 @@ static const struct mos6502_instr mos_opcodes[] =
 
     MOS_OP(0x90, BCC, MOS_AM_REL,  2),
     MOS_OP(0xB0, BCS, MOS_AM_REL,  2),
+    MOS_OP(0xF0, BEQ, MOS_AM_REL,  2),
+    MOS_OP(0x30, BMI, MOS_AM_REL,  2),
+    MOS_OP(0xD0, BNE, MOS_AM_REL,  2),
+    MOS_OP(0x10, BPL, MOS_AM_REL,  2),
+    MOS_OP(0x50, BVC, MOS_AM_REL,  2),
+    MOS_OP(0x70, BVS, MOS_AM_REL,  2),
 };
 
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
@@ -981,50 +993,55 @@ static void uop_exec(struct mos6502_cpu* cpu)
         cpu->DB = load_word(cpu, cpu->AB);
         cpu->Y = exec_adda3(cpu, cpu->Y, ~cpu->DB, 1);
         break;
-    case MOS_UOP_BCC:
-        assert(cpu->instr.address_latched);
-        switch (cpu->instr.cycle) {
-        case 0:
-            /* If condition doesn't hold, this will be the last cycle */
-            if (!(cpu->P & SR_C)) {
-                cpu->instr.ncycles++;
-            }
-            break;
-        case 1:
-            if ((cpu->AB & ~0xFF) != (cpu->PC & ~0xFF)) {
-                cpu->instr.ncycles++;
-                break;
-            }
-            /* fallthrough */
-        case 2:
-            cpu->PC = cpu->AB;
-            break;
-        default:
-            ep_verify(false);
+
+    #define MOS_EXEC_BR(_cond_) \
+        assert(cpu->instr.address_latched); \
+        switch (cpu->instr.cycle) { \
+        case 0: \
+            if (_cond_) { \
+                cpu->instr.ncycles++; \
+            } \
+            break; \
+        case 1: \
+            if ((cpu->AB & ~0xFF) != (cpu->PC & ~0xFF)) { \
+                cpu->instr.ncycles++; \
+                break; \
+            } \
+            /* fallthrough */ \
+        case 2: \
+            cpu->PC = cpu->AB; \
+            break; \
+        default: \
+            ep_verify(false); \
         }
+
+    case MOS_UOP_BCC:
+        MOS_EXEC_BR(!(cpu->P & SR_C));
         break;
     case MOS_UOP_BCS:
-        assert(cpu->instr.address_latched);
-        switch (cpu->instr.cycle) {
-        case 0:
-            /* If condition doesn't hold, this will be the last cycle */
-            if (cpu->P & SR_C) {
-                cpu->instr.ncycles++;
-            }
-            break;
-        case 1:
-            if ((cpu->AB & ~0xFF) != (cpu->PC & ~0xFF)) {
-                cpu->instr.ncycles++;
-                break;
-            }
-            /* fallthrough */
-        case 2:
-            cpu->PC = cpu->AB;
-            break;
-        default:
-            ep_verify(false);
-        }
+        MOS_EXEC_BR(cpu->P & SR_C);
         break;
+    case MOS_UOP_BNE:
+        MOS_EXEC_BR(!(cpu->P & SR_Z));
+        break;
+    case MOS_UOP_BEQ:
+        MOS_EXEC_BR(cpu->P & SR_Z);
+        break;
+    case MOS_UOP_BPL:
+        MOS_EXEC_BR(!(cpu->P & SR_N));
+        break;
+    case MOS_UOP_BMI:
+        MOS_EXEC_BR(cpu->P & SR_N);
+        break;
+    case MOS_UOP_BVC:
+        MOS_EXEC_BR(!(cpu->P & SR_V));
+        break;
+    case MOS_UOP_BVS:
+        MOS_EXEC_BR(cpu->P & SR_V);
+        break;
+
+    #undef MOS_EXEC_BR
+
     default:
         ep_verify(false);
     };
