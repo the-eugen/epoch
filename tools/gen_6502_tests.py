@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate LDA instruction tests for the MOS6502 emulator."""
+"""Generate instruction tests for the MOS6502 emulator."""
 from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
@@ -38,116 +38,114 @@ class AddressModeId(Enum):
     Relative    = "rel"
 
 @dataclass
-class CodeTemplate:
-    segs: list[tuple[int, bytes]]
-    tag: Optional[str] = None
-    state: Optional[dict[Register, byte]] = None
-    eaddr: Optional[int] = None
-    xpage: Optional[bool] = False
-
-TemplateGen: TypeAlias = Callable[[int, int], list[CodeTemplate]]
+class ModeTemplate:
+    apply:  callable[[int, dict], list[tuple[int, bytes]]]
+    tag:    str = None
+    state:  dict[Register, byte] = None
+    eaddr:  int = None
+    xpage:  bool = False
 
 # Test code templates
-default_templates: dict[AddressModeId, TemplateGen] = {
-    AddressModeId.Implied: lambda op, val: [
-        CodeTemplate(
-            segs    = [(0x0000, [op])],
+default_templates: dict[AddressModeId, list[ModeTemplate]] = {
+    AddressModeId.Implied: [
+        ModeTemplate(
+            apply   = lambda op, operands: [(0x0000, [op])],
         ),
     ],
-    AddressModeId.Immediate: lambda op, val: [
-        CodeTemplate(
-            segs    = [(0x0000, [op, val])],
+    AddressModeId.Immediate: [
+        ModeTemplate(
+            apply   = lambda op, operands: [(0x0000, [op, operands['Memory']])],
             eaddr   = 0x0001,
         ),
     ],
-    AddressModeId.Zeropage: lambda op, val: [
-        CodeTemplate(
-            segs    = [(0x0000, [op, 0x02, val])],
+    AddressModeId.Zeropage: [
+        ModeTemplate(
+            apply   = lambda op, operands: [(0x0000, [op, 0x02, operands['Memory']])],
             eaddr   = 0x0002,
         ),
     ],
-    AddressModeId.ZeropageX: lambda op, val: [
-        CodeTemplate(
+    AddressModeId.ZeropageX: [
+        ModeTemplate(
             state   = {Register.X: 0x01},
-            segs    = [(0x0000, [op, 0x01, val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0x01, operands['Memory']])],
             eaddr   = 0x0002,
         ),
-        CodeTemplate(
+        ModeTemplate(
             state   = {Register.X: 0x03},
-            segs    = [(0x0000, [op, 0xff, val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0xff, operands['Memory']])],
             tag     = "overflow",
             eaddr   = 0x0002,
         ),
     ],
-    AddressModeId.ZeropageY: lambda op, val: [
-        CodeTemplate(
+    AddressModeId.ZeropageY: [
+        ModeTemplate(
             state   = {Register.Y: 0x01},
-            segs    = [(0x0000, [op, 0x01, val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0x01, operands['Memory']])],
             eaddr   = 0x0002,
         ),
-        CodeTemplate(
+        ModeTemplate(
             state   = {Register.Y: 0x03},
-            segs    = [(0x0000, [op, 0xff, val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0xff, operands['Memory']])],
             tag     = "overflow",
             eaddr   = 0x0002,
         ),
     ],
-    AddressModeId.Absolute: lambda op, val: [
-        CodeTemplate(
-            segs    = [(0x0000, [op, 0x01, 0x10]), (0x1001, [val])],
+    AddressModeId.Absolute: [
+        ModeTemplate(
+            apply   = lambda op, operands: [(0x0000, [op, 0x01, 0x10]), (0x1001, [operands['Memory']])],
             eaddr   = 0x1001,
         ),
     ],
-    AddressModeId.AbsoluteX: lambda op, val: [
-        CodeTemplate(
+    AddressModeId.AbsoluteX: [
+        ModeTemplate(
             state   = {Register.X: 0x01},
-            segs    = [(0x0000, [op, 0x00, 0x10]), (0x1001, [val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0x00, 0x10]), (0x1001, [operands['Memory']])],
             eaddr   = 0x1001,
         ),
-        CodeTemplate(
+        ModeTemplate(
             state   = {Register.X: 0x02},
-            segs    = [(0x0000, [op, 0xFF, 0x0F]), (0x1001, [val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0xFF, 0x0F]), (0x1001, [operands['Memory']])],
             tag     = "xpage",
             eaddr   = 0x1001,
             xpage   = True,
         ),
     ],
-    AddressModeId.AbsoluteY: lambda op, val: [
-        CodeTemplate(
+    AddressModeId.AbsoluteY: [
+        ModeTemplate(
             state   = {Register.Y: 0x01},
-            segs    = [(0x0000, [op, 0x00, 0x10]), (0x1001, [val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0x00, 0x10]), (0x1001, [operands['Memory']])],
             eaddr   = 0x1001,
         ),
-        CodeTemplate(
+        ModeTemplate(
             state   = {Register.Y:0x02},
-            segs    = [(0x0000, [op, 0xFF, 0x0F]), (0x1001, [val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0xFF, 0x0F]), (0x1001, [operands['Memory']])],
             tag     = "xpage",
             eaddr   = 0x1001,
             xpage   = True,
         ),
     ],
-    AddressModeId.IndirectX: lambda op, val: [
-        CodeTemplate(
+    AddressModeId.IndirectX: [
+        ModeTemplate(
             state   = {Register.X: 0x01},
-            segs    = [(0x0000, [op, 0x01, 0x80]), (0x0080, [val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0x01, 0x80]), (0x0080, [operands['Memory']])],
             eaddr   = 0x0080,
         ),
-        CodeTemplate(
+        ModeTemplate(
             state   = {Register.X: 0x03},
-            segs    = [(0x0000, [op, 0xFF, 0x80]), (0x0080, [val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0xFF, 0x80]), (0x0080, [operands['Memory']])],
             tag     = "overflow",
             eaddr   = 0x0080,
         ),
     ],
-    AddressModeId.IndirectY: lambda op, val: [
-        CodeTemplate(
+    AddressModeId.IndirectY: [
+        ModeTemplate(
             state   = {Register.Y: 0x04},
-            segs    = [(0x0000, [op, 0x02, 0x80, 0x10]), (0x1084, [val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0x02, 0x80, 0x10]), (0x1084, [operands['Memory']])],
             eaddr   = 0x1084,
         ),
-        CodeTemplate(
+        ModeTemplate(
             state   = {Register.Y: 0x80},
-            segs    = [(0x0000, [op, 0x02, 0x80, 0x10]), (0x1100, [val])],
+            apply   = lambda op, operands: [(0x0000, [op, 0x02, 0x80, 0x10]), (0x1100, [operands['Memory']])],
             tag     = "xpage",
             eaddr   = 0x1100,
             xpage   = True,
@@ -155,21 +153,31 @@ default_templates: dict[AddressModeId, TemplateGen] = {
     ],
 }
 
-jump_templates: dict[AddressModeId, TemplateGen] = {
-    AddressModeId.Absolute: lambda op, addr: [
-        CodeTemplate(
-            segs    = [(0x0000, [op, addr & 0xFF, (addr >> 8) & 0xFF]), (addr, [0x00])],
+jump_templates: dict[AddressModeId, list[ModeTemplate]] = {
+    AddressModeId.Absolute: [
+        ModeTemplate(
+            apply   = lambda op, operands: [
+                        (0x0000, [op, operands['Memory'] & 0xFF, (operands['Memory'] >> 8) & 0xFF]),
+                        (operands['Memory'], [0x00])
+                      ],
         ),
     ],
-    AddressModeId.Indirect: lambda op, addr: [
-        CodeTemplate(
-            segs    = [(0x0000, [op, 0x01, 0x10]), (0x1001, [addr & 0xFF, (addr >> 8) & 0xFF]), (addr, [0x00])],
+    AddressModeId.Indirect: [
+        ModeTemplate(
+            apply   = lambda op, operands: [
+                        (0x0000, [op, 0x01, 0x10]),
+                        (0x1001, [operands['Memory'] & 0xFF, (operands['Memory'] >> 8) & 0xFF]),
+                        (operands['Memory'], [0x00])
+                      ],
             eaddr   = 0x1001,
         ),
     ],
-    AddressModeId.Relative: lambda op, offset: [
-        CodeTemplate(
-            segs    = [(0x0000, [op, offset & 0xFF]), ((offset & 0xFF) + 3, [0x00])],
+    AddressModeId.Relative: [
+        ModeTemplate(
+            apply   = lambda op, operands: [
+                        (0x0000, [op, operands['Memory'] & 0xFF]),
+                        ((operands['Memory'] & 0xFF) + 3, [0x00])
+                      ],
             eaddr   = 0x1001,
         ),
     ],
@@ -178,11 +186,6 @@ jump_templates: dict[AddressModeId, TemplateGen] = {
 Operand: TypeAlias = Union[Register, Literal['Memory'], Literal['Flags'], Literal['Stack']]
 Semantics = Callable[dict[Operand, int], dict[Operand, int]]
 
-class TemplateDataStrat(Enum):
-    FromTestcase = auto()
-    InvertExpected = auto()
-    Nop = auto()
-
 @dataclass
 class Instruction:
     mnemonic:   str
@@ -190,22 +193,12 @@ class Instruction:
     testcases:  dict[Operand, [int]]
     semantics:  Semantics
     flagmask:   int = 0
-    tdatastrat: TemplateDataStrat = TemplateDataStrat.Nop
     xpagestall: bool = False
-    templates:  dict[AddressModeId, TemplateGen] = None
+    templates:  dict[AddressModeId, list[ModeTemplate]] = None
 
     def __post_init__(self):
         if self.templates is None:
             self.templates = default_templates
-
-# Used for load-type instructions where template data value is the testcase input
-def data_value_from_testcase(tc, exp): return tc["Memory"]
-
-# Used for store-type instructions where template data value is the inverse of expected to catch missing stores
-def data_value_invert_expected(tc, exp): return (~exp["Memory"]) & 0xFF
-
-# Used for instructions that do not touch memory (e.g. NOP)
-def data_value_constant(tc, exp): return 0
 
 # Arithmetic flags side effects
 def flag_z(v: int): return StatusFlags.Z if (v & 0xFF) == 0 else 0
@@ -243,7 +236,6 @@ instructions: list[Instruction] = [
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
     Instruction(
@@ -261,7 +253,6 @@ instructions: list[Instruction] = [
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
     Instruction(
@@ -282,7 +273,6 @@ instructions: list[Instruction] = [
                       },
         testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
     Instruction(
@@ -295,8 +285,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: {
                         'Memory': tc[Register.X],
                       },
-        testcases   = {Register.X: [0x42]},
-        tdatastrat  = TemplateDataStrat.InvertExpected,
+        testcases   = {Register.X: [0x42], 'Memory': [0x00]},
     ),
     Instruction(
         mnemonic    = 'STY',
@@ -308,8 +297,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: {
                         'Memory': tc[Register.Y],
                       },
-        testcases   = {Register.Y: [0x42]},
-        tdatastrat  = TemplateDataStrat.InvertExpected,
+        testcases   = {Register.Y: [0x42], 'Memory': [0x00]},
     ),
     Instruction(
         mnemonic    = 'STA',
@@ -325,8 +313,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: {
                         'Memory': tc[Register.A],
                       },
-        testcases   = {Register.A: [0x42]},
-        tdatastrat  = TemplateDataStrat.InvertExpected,
+        testcases   = {Register.A: [0x42], 'Memory': [0x00]},
     ),
     Instruction(
         mnemonic    = 'TAX',
@@ -383,7 +370,7 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.SP: tc[Register.X],
-                        'Flags':    data_move_flags(tc[Register.X]),
+                        'Flags':     data_move_flags(tc[Register.X]),
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
@@ -417,9 +404,9 @@ instructions: list[Instruction] = [
                         AddressModeId.Implied:      (0x68, 4)
                       },
         semantics   = lambda tc: {
-                        Register.A:     tc['Stack'],
-                        Register.SP:    tc[Register.SP] + 1,
-                        'Flags':        data_move_flags(tc['Stack']),
+                        Register.A:  tc['Stack'],
+                        Register.SP: tc[Register.SP] + 1,
+                        'Flags':     data_move_flags(tc['Stack']),
                       },
         testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFC], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
@@ -462,7 +449,6 @@ instructions: list[Instruction] = [
                       },
         testcases   = {'Memory': [0x01, 0xAA, 0x42, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
         mnemonic    = 'INC',
@@ -478,7 +464,6 @@ instructions: list[Instruction] = [
                       },
         testcases   = {'Memory': [0xFF, 0xAA, 0x42, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
         mnemonic    = 'DEX',
@@ -549,7 +534,6 @@ instructions: list[Instruction] = [
                         })(tc[Register.A] + tc['Memory'] + ((tc['Flags'] & StatusFlags.C) != 0))
                       ),
         testcases   = {Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0x00, 0x01], 'Flags': [StatusFlags.C, 0x00]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C | StatusFlags.V,
         xpagestall  = True,
     ),
@@ -574,7 +558,6 @@ instructions: list[Instruction] = [
                         })(tc[Register.A] + (~tc['Memory'] & 0xFF) + ((tc['Flags'] & StatusFlags.C) != 0))
                       ),
         testcases   = {Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0xFF, 0xFE], 'Flags': [StatusFlags.C, 0x00]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C | StatusFlags.V,
         xpagestall  = True,
     ),
@@ -595,7 +578,6 @@ instructions: list[Instruction] = [
                             (tc[Register.A] & tc['Memory'])
                       ),
         testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         flagmask    = StatusFlags.N | StatusFlags.Z,
         xpagestall  = True,
     ),
@@ -617,7 +599,6 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
     Instruction(
@@ -638,7 +619,6 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         xpagestall  = True,
     ),
     Instruction(
@@ -667,7 +647,6 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {'Memory': [0x80, 0xAA, 0x55], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N | StatusFlags.C]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
         mnemonic    = 'LSRA', # LSR/accumulator
@@ -695,7 +674,6 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N | StatusFlags.C]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
         mnemonic    = 'ROLA', # ROL/accumulator
@@ -723,7 +701,6 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
         mnemonic    = 'RORA', # ROR/accumulator
@@ -751,7 +728,6 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
         mnemonic    = 'CLC',
@@ -799,7 +775,6 @@ instructions: list[Instruction] = [
                       }),
         flagmask    = StatusFlags.N | StatusFlags.V | StatusFlags.Z,
         testcases   = {Register.A:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
     ),
     Instruction(
         mnemonic    = 'CMP',
@@ -819,7 +794,6 @@ instructions: list[Instruction] = [
                                  (StatusFlags.N if ((tc[Register.A] - tc['Memory']) & 0x80) else 0)
                       }),
         testcases   = {Register.A:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         xpagestall  = True,
     ),
@@ -836,7 +810,6 @@ instructions: list[Instruction] = [
                                  (StatusFlags.N if ((tc[Register.X] - tc['Memory']) & 0x80) else 0)
                       }),
         testcases   = {Register.X:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         xpagestall  = True,
     ),
@@ -853,7 +826,6 @@ instructions: list[Instruction] = [
                                  (StatusFlags.N if ((tc[Register.Y] - tc['Memory']) & 0x80) else 0)
                       }),
         testcases   = {Register.Y:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         xpagestall  = True,
     ),
@@ -867,7 +839,6 @@ instructions: list[Instruction] = [
                         Register.PC: tc['Memory'] + 1
                       }),
         testcases   = {'Memory':[0x2001]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         templates   = jump_templates,
     ),
     Instruction(
@@ -881,7 +852,6 @@ instructions: list[Instruction] = [
                         })((tc['Memory'] if not (tc['Flags'] & StatusFlags.C) else 0) + 2 + 1, 0x0001)
                       ),
         testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.C]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         templates   = jump_templates,
     ),
     Instruction(
@@ -895,7 +865,6 @@ instructions: list[Instruction] = [
                         })((tc['Memory'] if (tc['Flags'] & StatusFlags.C) else 0) + 2 + 1, 0x0001)
                       ),
         testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.C]},
-        tdatastrat  = TemplateDataStrat.FromTestcase,
         templates   = jump_templates,
     ),
 ]
@@ -909,34 +878,26 @@ def expand_operand_values(spec: dict[Operand, list[int]]):
 
 def gen_instruction_tests(instr: Instruction) -> None:
     for testcase in expand_operand_values(instr.testcases):
-        expected = instr.semantics(testcase)
         for mode, (opcode, timing) in instr.modes.items():
-
-            if instr.tdatastrat == TemplateDataStrat.FromTestcase:
-                data_val = testcase['Memory']
-            elif instr.tdatastrat == TemplateDataStrat.InvertExpected:
-                data_val = ~expected['Memory'] & 0xFF
-            elif instr.tdatastrat == TemplateDataStrat.Nop:
-                data_val = 0
-
-            gen_templates = instr.templates[mode]
-            for template in gen_templates(opcode, data_val):
-
-                template_tag = f"_{template.tag}" if template.tag else ""
+            for mode_template in instr.templates[mode]:
+                template_tag = f"_{mode_template.tag}" if mode_template.tag else ""
                 testcase_tag = "_".join(f"{v:02x}" for v in testcase.values())
                 test_name = f"test_{instr.mnemonic}_{mode.value}{template_tag}_{testcase_tag}".lower()
+
+                expected = instr.semantics(testcase)
+                segments = mode_template.apply(opcode, testcase)
 
                 print(f"ep_test({test_name})")
                 print( "{")
                 print( "    const struct test_ram_segment segments[] = {")
-                for base, data in template.segs:
+                for base, data in segments:
                     hex_bytes = ", ".join(f"0x{b:02x}" for b in data)
                     print(f"        MAKE_TEST_SEGMENT_VEC(0x{base:04x}, {{{hex_bytes}}}),")
                 print( "    };")
                 print()
 
                 print( "    struct mos6502_cpu cpu;")
-                print(f"    init_test_cpu(&cpu, segments, {len(template.segs)});");
+                print(f"    init_test_cpu(&cpu, segments, {len(segments)});");
                 print()
 
                 # Setup the src operands and template state
@@ -951,8 +912,8 @@ def gen_instruction_tests(instr: Instruction) -> None:
                     elif key != 'Memory':
                         raise ValueError("Invalid operand type")
 
-                if template.state:
-                    for reg, val in template.state.items():
+                if mode_template.state:
+                    for reg, val in mode_template.state.items():
                         print(f"    cpu.{reg.value} = 0x{val:02x};");
 
                 print(f"    mos_word_t orig_flags = cpu.P;");
@@ -962,7 +923,7 @@ def gen_instruction_tests(instr: Instruction) -> None:
                 if expected.get('Cycles'):
                     effective_cycles = expected['Cycles'];
                 else:
-                    effective_cycles = timing + (1 if instr.xpagestall and template.xpage else 0)
+                    effective_cycles = timing + (1 if instr.xpagestall and mode_template.xpage else 0)
 
                 print(f"    ep_verify_equal(cycles, {effective_cycles});")
                 print(f"    ep_verify_equal(cpu.total_retired, 1);");
@@ -972,7 +933,7 @@ def gen_instruction_tests(instr: Instruction) -> None:
                     if isinstance(key, Register):
                         print(f"    ep_verify_equal(cpu.{key.value}, 0x{value:02x});")
                     elif key == 'Memory':
-                        print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x{template.eaddr:04x}), 0x{value:02x});")
+                        print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x{mode_template.eaddr:04x}), 0x{value:02x});")
                     elif key == 'Flags':
                         print(f"    ep_verify_equal(cpu.P & 0x{instr.flagmask:02x}, 0x{value:02x});");
                     elif key == 'Stack':
@@ -983,7 +944,6 @@ def gen_instruction_tests(instr: Instruction) -> None:
                 # Instruction shouldn't've modified the flags that are not in its affected flags mask
                 print(f"    ep_verify_equal(cpu.P & ~0x{instr.flagmask:02x}, orig_flags & ~0x{instr.flagmask:02x});")
                 print()
-
                 print( "    free_test_cpu(&cpu);");
                 print( "}\n")
 
