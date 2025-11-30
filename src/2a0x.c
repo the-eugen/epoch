@@ -60,6 +60,8 @@ enum mos6502_uop
     MOS_UOP_CPX,
     MOS_UOP_CPY,
     MOS_UOP_JMP,
+    MOS_UOP_JSR,
+    MOS_UOP_RTS,
     MOS_UOP_BCC,
     MOS_UOP_BCS,
     MOS_UOP_BEQ,
@@ -372,6 +374,8 @@ static const struct mos6502_instr mos_opcodes[] =
 
     MOS_OP(0x4C, JMP, MOS_AM_ABS,  3, MOS_INSTR_JUMP),
     MOS_OP(0x6C, JMP, MOS_AM_IND,  5, MOS_INSTR_JUMP),
+    MOS_OP(0x20, JSR, MOS_AM_ABS,  6, MOS_INSTR_JUMP),
+    MOS_OP(0x60, RTS, MOS_AM_IMP,  6, MOS_INSTR_JUMP),
 
     MOS_OP(0x90, BCC, MOS_AM_REL,  2),
     MOS_OP(0xB0, BCS, MOS_AM_REL,  2),
@@ -422,6 +426,24 @@ static void store_word(struct mos6502_cpu* cpu, mos_pa_t pa, mos_word_t val)
     } else {
         r->handler(cpu, r, true, pa - r->base, &val);
     }
+}
+
+static void push_word(struct mos6502_cpu* cpu, mos_word_t val)
+{
+    ep_assert(cpu);
+
+    /* Stack wraps around inside the segment */
+    store_word(cpu, 0x0100 | cpu->SP, val);
+    cpu->SP--;
+}
+
+static mos_word_t pop_word(struct mos6502_cpu* cpu)
+{
+    ep_assert(cpu);
+
+    /* Stack wraps around inside the segment */
+    cpu->SP++;
+    return load_word(cpu, 0x0100 | cpu->SP);
 }
 
 static struct mos6502_instr fetch_next_instr(struct mos6502_cpu* cpu)
@@ -725,11 +747,9 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_PHA:
         switch (cpu->instr.cycle) {
         case 0:
-            cpu->AB = 0x0100 | cpu->SP;
             break;
         case 1:
-            store_word(cpu, cpu->AB, cpu->A);
-            cpu->SP--;
+            push_word(cpu, cpu->A);
             break;
         default:
             ep_verify(false);
@@ -738,13 +758,11 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_PLA:
         switch (cpu->instr.cycle) {
         case 0:
-            cpu->SP++;
             break;
         case 1:
-            cpu->AB = 0x0100 | cpu->SP;
             break;
         case 2:
-            cpu->A = load_word(cpu, cpu->AB);
+            cpu->A = pop_word(cpu);
             set_value_flags(cpu, cpu->A);
             break;
         default:
@@ -754,11 +772,9 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_PHP:
         switch (cpu->instr.cycle) {
         case 0:
-            cpu->AB = 0x0100 | cpu->SP;
             break;
         case 1:
-            store_word(cpu, cpu->AB, cpu->P | SR_B | SR_U);
-            cpu->SP--;
+            push_word(cpu, cpu->P | SR_B | SR_U);
             break;
         default:
             ep_verify(false);
@@ -767,13 +783,11 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_PLP:
         switch (cpu->instr.cycle) {
         case 0:
-            cpu->SP++;
             break;
         case 1:
-            cpu->AB = 0x0100 | cpu->SP;
             break;
         case 2:
-            cpu->P = (cpu->P & (SR_B | SR_U)) | (load_word(cpu, cpu->AB) & ~(SR_B | SR_U));
+            cpu->P = (cpu->P & (SR_B | SR_U)) | (pop_word(cpu) & ~(SR_B | SR_U));
             break;
         default:
             ep_verify(false);
@@ -1042,6 +1056,44 @@ static void uop_exec(struct mos6502_cpu* cpu)
 
     #undef MOS_EXEC_BR
 
+    case MOS_UOP_JMP:
+        /* Nothing to do here */
+        break;
+    case MOS_UOP_JSR:
+        /* TODO: JSR is not following ordinary ABS addressing mode, although the outcome is the same */
+        assert(cpu->instr.address_latched);
+        switch (cpu->instr.cycle) {
+        case 2:
+            break;
+        case 3:
+            push_word(cpu, cpu->PC >> 8);
+            break;
+        case 4:
+            push_word(cpu, cpu->PC & 0xFF);
+            break;
+        default:
+            ep_verify(false);
+        }
+        break;
+    case MOS_UOP_RTS:
+        switch (cpu->instr.cycle) {
+        case 0:
+            break;
+        case 1:
+            break;
+        case 2:
+            cpu->AB = pop_word(cpu);
+            break;
+        case 3:
+            cpu->AB = ((mos_pa_t)pop_word(cpu) << 8) | cpu->AB;
+            break;
+        case 4:
+            cpu->AB += 1;
+            break;
+        default:
+            ep_verify(false);
+        }
+        break;
     default:
         ep_verify(false);
     };
@@ -1118,7 +1170,19 @@ mos_word_t mos6502_load_word(struct mos6502_cpu* cpu, mos_pa_t addr)
 void mos6502_store_word(struct mos6502_cpu* cpu, mos_pa_t addr, mos_word_t val)
 {
     ep_verify(cpu);
-    return store_word(cpu, addr, val);
+    store_word(cpu, addr, val);
+}
+
+mos_word_t mos6502_pop_word(struct mos6502_cpu* cpu)
+{
+    ep_verify(cpu);
+    return pop_word(cpu);
+}
+
+void mos6502_push_word(struct mos6502_cpu* cpu, mos_word_t val)
+{
+    ep_verify(cpu);
+    push_word(cpu, val);
 }
 
 bool mos6502_tick(struct mos6502_cpu* cpu)

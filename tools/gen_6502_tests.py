@@ -181,6 +181,12 @@ jump_templates: dict[AddressModeId, list[ModeTemplate]] = {
             eaddr   = 0x1001,
         ),
     ],
+    # This is used for the RTS instruction
+    AddressModeId.Implied: [
+        ModeTemplate(
+            apply   = lambda op, operands: [(0x0000, [op]), (operands['Memory'] + 1, [0x00])]
+        )
+    ],
 }
 
 Operand: TypeAlias = Union[Register, Literal['Memory'], Literal['Flags'], Literal['Stack']]
@@ -418,10 +424,10 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         Register.A:  tc['Stack'],
-                        Register.SP: tc[Register.SP] + 1,
+                        Register.SP: tc[Register.SP],
                         'Flags':     data_move_flags(tc['Stack']),
                       },
-        testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFC], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
+        testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFD], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
     ),
     Instruction(
@@ -443,9 +449,9 @@ instructions: list[Instruction] = [
                       },
         semantics   = lambda tc: {
                         'Flags':     tc['Stack'] & ~0x30,
-                        Register.SP: tc[Register.SP] + 1,
+                        Register.SP: tc[Register.SP],
                       },
-        testcases   = { 'Stack': [0xAA], 'Flags':[0x55], Register.SP: [0xFC] },
+        testcases   = { 'Stack': [0xAA], 'Flags':[0x55], Register.SP: [0xFD] },
         flagmask    = 0xFF & ~0x30, # PLP affects all flags except for bits 4 and 5
     ),
     Instruction(
@@ -910,6 +916,31 @@ instructions: list[Instruction] = [
         testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.V]},
         templates   = jump_templates,
     ),
+    Instruction(
+        mnemonic    = 'JSR',
+        modes       = {
+                        AddressModeId.Absolute: (0x20, 6)
+                      },
+        semantics   = lambda tc: {
+                        Register.PC: tc['Memory'] + 1,
+                        Register.SP: (tc[Register.SP] - 2) & 0xFF,
+                        'Stack':     [0x03, 0x00],
+                      },
+        testcases   = { 'Memory': [0x1001], Register.SP: [0xFD, 0x00] },
+        templates   = jump_templates,
+    ),
+    Instruction(
+        mnemonic    = 'RTS',
+        modes       = {
+                        AddressModeId.Implied: (0x60, 6)
+                      },
+        semantics   = lambda tc: {
+                        Register.PC: tc['Memory'] + 2,
+                        Register.SP: tc[Register.SP],
+                      },
+        testcases   = { 'Stack': [[0x10, 0x01]], 'Memory': [0x1001], Register.SP: [0xFD, 0xFF] },
+        templates   = jump_templates,
+    ),
 ]
 
 print(f"/* This file is auto-generated from {Path(__file__).name} */\n");
@@ -924,7 +955,7 @@ def gen_instruction_tests(instr: Instruction) -> None:
         for mode, (opcode, timing) in instr.modes.items():
             for mode_template in instr.templates[mode]:
                 template_tag = f"_{mode_template.tag}" if mode_template.tag else ""
-                testcase_tag = "_".join(f"{v:02x}" for v in testcase.values())
+                testcase_tag = "_".join(f"{b:02x}" for v in testcase.values() for b in (v if isinstance(v, list) else [v]))
                 test_name = f"test_{instr.mnemonic}_{mode.value}{template_tag}_{testcase_tag}".lower()
 
                 expected = instr.semantics(testcase)
@@ -946,10 +977,15 @@ def gen_instruction_tests(instr: Instruction) -> None:
                 # Setup the src operands and template state
                 for key, value in testcase.items():
                     if isinstance(key, Register):
-                        print(f"    cpu.{key.value} = 0x{value:02x};");
+                        # There's a dependency between the SP register value and the stack data, if it's present.
+                        # If testcase only specifies SP and no stack data then set the register now,
+                        # otherwise let 'Stack' operand take care of both.
+                        if key != Register.SP or 'Stack' not in testcase:
+                            print(f"    cpu.{key.value} = 0x{value:02x};");
                     elif key == 'Stack':
-                        sp = testcase[Register.SP] + 1
-                        print(f"    mos6502_store_word(&cpu, 0x0100 | 0x{sp:02x}, 0x{value:02x});")
+                        print(f"    cpu.SP = 0x{testcase[Register.SP]:02x};");
+                        for i, v in enumerate(value if isinstance(value, list) else [value]):
+                            print(f"    mos6502_push_word(&cpu, 0x{v:02x});")
                     elif key == 'Flags':
                         print(f"    cpu.P = (cpu.P & ~0x{instr.flagmask}) | 0x{value:02x};")
                     elif key != 'Memory':
@@ -980,7 +1016,9 @@ def gen_instruction_tests(instr: Instruction) -> None:
                     elif key == 'Flags':
                         print(f"    ep_verify_equal(cpu.P & 0x{instr.flagmask:02x}, 0x{value:02x});");
                     elif key == 'Stack':
-                        print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x0100 | (cpu.SP + 1)), 0x{value:02x});")
+                        for i, v in enumerate(value if isinstance(value, list) else [value]):
+                            # Don't pop from the stack, only walk it, to preserve post-exec state
+                            print(f"    ep_verify_equal(mos6502_load_word(&cpu, 0x0100 | (cpu.SP + {i} + 1)), 0x{v:02x});")
                     elif key != 'Cycles':
                         raise ValueError("Invalid output operand type")
 
