@@ -16,11 +16,10 @@ ep_noreturn void _ep_abort(const char* cond, const char* file, unsigned int line
 #define ep_verify(_cond_) ((_cond_) ? (void)0 : _ep_abort(#_cond_, __FILE__, __LINE__, __func__))
 
 #ifdef EP_DEBUG
-
+#include <stdio.h>
 #define ep_assert(_cond_) ep_verify(_cond_)
-
+#define ep_trace(fmt, ...) fprintf(stderr, "%s:%u: " fmt "\n", __FILE__, __LINE__, ## __VA_ARGS__)
 #else
-
 #define ep_assert(_cond_)
-
+#define ep_trace(...)
 #endif

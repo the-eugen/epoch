@@ -157,8 +157,7 @@ jump_templates: dict[AddressModeId, list[ModeTemplate]] = {
     AddressModeId.Absolute: [
         ModeTemplate(
             apply   = lambda op, operands: [
-                        (0x0000, [op, operands['Memory'] & 0xFF, (operands['Memory'] >> 8) & 0xFF]),
-                        (operands['Memory'], [0x00])
+                        (0x0000, [op, operands['Memory'] & 0xFF, (operands['Memory'] >> 8) & 0xFF])
                       ],
         ),
     ],
@@ -167,24 +166,20 @@ jump_templates: dict[AddressModeId, list[ModeTemplate]] = {
             apply   = lambda op, operands: [
                         (0x0000, [op, 0x01, 0x10]),
                         (0x1001, [operands['Memory'] & 0xFF, (operands['Memory'] >> 8) & 0xFF]),
-                        (operands['Memory'], [0x00])
                       ],
             eaddr   = 0x1001,
         ),
     ],
     AddressModeId.Relative: [
         ModeTemplate(
-            apply   = lambda op, operands: [
-                        (0x0000, [op, operands['Memory'] & 0xFF]),
-                        ((operands['Memory'] & 0xFF) + 3, [0x00])
-                      ],
+            apply   = lambda op, operands: [(0x0000, [op, operands['Memory'] & 0xFF])],
             eaddr   = 0x1001,
         ),
     ],
     # This is used for the RTS instruction
     AddressModeId.Implied: [
         ModeTemplate(
-            apply   = lambda op, operands: [(0x0000, [op]), (operands['Memory'] + 1, [0x00])]
+            apply   = lambda op, operands: [(0x0000, [op])],
         )
     ],
 }
@@ -228,15 +223,15 @@ def data_move_flags(v: int): return flag_z(v) | flag_n(v)
 
 def branch_semantics(predicate):
     def semantics(tc):
-        baseaddr = 0x0001
-        destaddr = (tc['Memory'] if predicate(tc) else 0) + 3
+        baseaddr = 0x0002
+        # offset is signed
+        offset = ((tc['Memory'] ^ 0x80) - 0x80) if predicate(tc) else 0
+        destaddr = (baseaddr + offset) & 0xFFFF
         timing = 2 if not predicate(tc) else 3 if (destaddr & 0xFF00) == (baseaddr & 0xFF00) else 4
-
         return {
             Register.PC: destaddr,
             'Cycles':    timing,
         }
-
     return semantics
 
 instructions: list[Instruction] = [
@@ -855,7 +850,7 @@ instructions: list[Instruction] = [
                         AddressModeId.Indirect: (0x6C, 5),
                       },
         semantics   = lambda tc: ({
-                        Register.PC: tc['Memory'] + 1
+                        Register.PC: tc['Memory']
                       }),
         testcases   = {'Memory':[0x2001]},
         templates   = jump_templates,
@@ -864,56 +859,56 @@ instructions: list[Instruction] = [
         mnemonic    = 'BCC',
         modes       = {AddressModeId.Relative: (0x90, 2)},
         semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.C)),
-        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.C]},
+        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.C]},
         templates   = jump_templates,
     ),
     Instruction(
         mnemonic    = 'BCS',
         modes       = {AddressModeId.Relative: (0xB0, 2)},
         semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.C)),
-        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.C]},
+        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.C]},
         templates   = jump_templates,
     ),
     Instruction(
         mnemonic    = 'BNE',
         modes       = {AddressModeId.Relative: (0xD0, 2)},
         semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.Z)),
-        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.Z]},
+        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.Z]},
         templates   = jump_templates,
     ),
     Instruction(
         mnemonic    = 'BEQ',
         modes       = {AddressModeId.Relative: (0xF0, 2)},
         semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.Z)),
-        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.Z]},
+        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.Z]},
         templates   = jump_templates,
     ),
     Instruction(
         mnemonic    = 'BPL',
         modes       = {AddressModeId.Relative: (0x10, 2)},
         semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.N)),
-        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.N]},
+        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.N]},
         templates   = jump_templates,
     ),
     Instruction(
         mnemonic    = 'BMI',
         modes       = {AddressModeId.Relative: (0x30, 2)},
         semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.N)),
-        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.N]},
+        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.N]},
         templates   = jump_templates,
     ),
     Instruction(
         mnemonic    = 'BVC',
         modes       = {AddressModeId.Relative: (0x50, 2)},
         semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.V)),
-        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.V]},
+        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.V]},
         templates   = jump_templates,
     ),
     Instruction(
         mnemonic    = 'BVS',
         modes       = {AddressModeId.Relative: (0x70, 2)},
         semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.V)),
-        testcases   = {'Memory':[0x08, 0xFF], 'Flags':[0x00, StatusFlags.V]},
+        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.V]},
         templates   = jump_templates,
     ),
     Instruction(
@@ -922,9 +917,9 @@ instructions: list[Instruction] = [
                         AddressModeId.Absolute: (0x20, 6)
                       },
         semantics   = lambda tc: {
-                        Register.PC: tc['Memory'] + 1,
+                        Register.PC: tc['Memory'],
                         Register.SP: (tc[Register.SP] - 2) & 0xFF,
-                        'Stack':     [0x03, 0x00],
+                        'Stack':     [0x02, 0x00],
                       },
         testcases   = { 'Memory': [0x1001], Register.SP: [0xFD, 0x00] },
         templates   = jump_templates,
@@ -935,7 +930,7 @@ instructions: list[Instruction] = [
                         AddressModeId.Implied: (0x60, 6)
                       },
         semantics   = lambda tc: {
-                        Register.PC: tc['Memory'] + 2,
+                        Register.PC: tc['Memory'] + 1, # RTS corrects for PC pushed by JSR
                         Register.SP: tc[Register.SP],
                       },
         testcases   = { 'Stack': [[0x10, 0x01]], 'Memory': [0x1001], Register.SP: [0xFD, 0xFF] },
@@ -963,15 +958,16 @@ def gen_instruction_tests(instr: Instruction) -> None:
 
                 print(f"ep_test({test_name})")
                 print( "{")
-                print( "    const struct test_ram_segment segments[] = {")
-                for base, data in segments:
-                    hex_bytes = ", ".join(f"0x{b:02x}" for b in data)
-                    print(f"        MAKE_TEST_SEGMENT_VEC(0x{base:04x}, {{{hex_bytes}}}),")
-                print( "    };")
+                print( "    struct mos6502_cpu cpu;")
+                print(f"    init_test_cpu(&cpu);");
                 print()
 
-                print( "    struct mos6502_cpu cpu;")
-                print(f"    init_test_cpu(&cpu, segments, {len(segments)});");
+                #print( "    const struct test_ram_segment segments[] = {")
+                for base, data in segments:
+                    hex_bytes = ", ".join(f"0x{b:02x}" for b in data)
+                    print(f"    store_words(&cpu, 0x{base:04x}, (const mos_word_t[]){{{hex_bytes}}}, {len(data)});")
+                    #print(f"        MAKE_TEST_SEGMENT_VEC(0x{base:04x}, {{{hex_bytes}}}),")
+                #print( "    };")
                 print()
 
                 # Setup the src operands and template state
@@ -1024,8 +1020,8 @@ def gen_instruction_tests(instr: Instruction) -> None:
 
                 # Instruction shouldn't've modified the flags that are not in its affected flags mask
                 print(f"    ep_verify_equal(cpu.P & ~0x{instr.flagmask:02x}, orig_flags & ~0x{instr.flagmask:02x});")
-                print()
-                print( "    free_test_cpu(&cpu);");
+                #print()
+                #print( "    free_test_cpu(&cpu);");
                 print( "}\n")
 
 for instr in instructions:
