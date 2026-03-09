@@ -166,9 +166,6 @@ struct mos6502_cpu
             mos_word_t PCH;
         };
     };
-
-    mos_pa_t AB;
-
     mos_word_t A;
     mos_word_t X;
     mos_word_t Y;
@@ -182,16 +179,27 @@ struct mos6502_cpu
     #define SR_Z (1u << 1)
     #define SR_C (1u << 0)
     mos_word_t SP;
-    mos_word_t DB;
 
-    /* Internal registers for effective address storage */
+    /* Internal register for effective address storage */
     union {
-        mos_pa_t HHLL;
+        mos_pa_t eaddr;
         struct {
-            mos_word_t LL;
-            mos_word_t HH;
+            mos_word_t eaddrl;
+            mos_word_t eaddrh;
         };
-    } eaddr;
+    };
+
+    /* Internal register for indirect address for ops that use it */
+    union {
+        mos_pa_t iaddr;
+        struct {
+            mos_word_t iaddrl;
+            mos_word_t iaddrh;
+        };
+    };
+
+    /* Internal data bus register */
+    mos_word_t db;
 
     bool halted;
     enum mos6502_tstate tstate;
@@ -564,7 +572,7 @@ static inline void latch_address(struct mos6502_cpu* cpu, mos_pa_t addr)
     if (cpu->instr.ctrlbits & MOS_CTRL_PC_ADDRESS_LATCH) {
         cpu->PC = addr;
     } else {
-        cpu->AB = addr;
+        cpu->eaddr = addr;
     }
     cpu->tstate = MOS_TSTATE_UOP;
 }
@@ -646,13 +654,14 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ZX:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = cpu_fetch(cpu, cpu->PC++);
+            cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
+            cpu->eaddrh = 0;
             break;
         case 2:
             /* Discarded read from 00LL */
-            cpu_fetch_discard(cpu, cpu->DB);
+            cpu_fetch_discard(cpu, cpu->eaddr);
             /* Wrap around on overflow */
-            latch_address(cpu, (cpu->DB + cpu->X) & 0xFF);
+            latch_address(cpu, (cpu->eaddr + cpu->X) & 0xFF);
             break;
         default:
             ep_assert(false);
@@ -661,13 +670,14 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ZY:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = cpu_fetch(cpu, cpu->PC++);
+            cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
+            cpu->eaddrh = 0;
             break;
         case 2:
             /* Discarded read from 00LL */
-            cpu_fetch_discard(cpu, cpu->DB);
+            cpu_fetch_discard(cpu, cpu->eaddr);
             /* Wrap around on overflow */
-            latch_address(cpu, (cpu->DB + cpu->Y) & 0xFF);
+            latch_address(cpu, (cpu->eaddr + cpu->Y) & 0xFF);
             break;
         default:
             ep_assert(false);
@@ -676,10 +686,11 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ABS:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = cpu_fetch(cpu, cpu->PC++);
+            cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            latch_address(cpu, ((mos_pa_t)cpu_fetch(cpu, cpu->PC++) << 8) | cpu->DB);
+            cpu->eaddrh = cpu_fetch(cpu, cpu->PC++);
+            latch_address(cpu, cpu->eaddr);
             break;
         default:
             ep_assert(false);
@@ -688,20 +699,20 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ABSX:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->eaddr.LL = cpu_fetch(cpu, cpu->PC++);
+            cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            cpu->eaddr.HH = cpu_fetch(cpu, cpu->PC++);
-            if (should_stall(cpu, cpu->eaddr.HHLL, cpu->X)) {
+            cpu->eaddrh = cpu_fetch(cpu, cpu->PC++);
+            if (should_stall(cpu, cpu->eaddr, cpu->X)) {
                 break;
             }
             /* fallthru */
         case 3:
             /* Discarded read from HH:(LL+X) on delay cycle */
             if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
-                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddr.HH << 8) | ((cpu->eaddr.LL + cpu->X) & 0xFF));
+                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->X) & 0xFF));
             }
-            latch_address(cpu, cpu->eaddr.HHLL + cpu->X);
+            latch_address(cpu, cpu->eaddr + cpu->X);
             break;
         default:
             ep_assert(false);
@@ -710,20 +721,20 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ABSY:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->eaddr.LL = cpu_fetch(cpu, cpu->PC++);
+            cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            cpu->eaddr.HH = cpu_fetch(cpu, cpu->PC++);
-            if (should_stall(cpu, cpu->eaddr.HHLL, cpu->Y)) {
+            cpu->eaddrh = cpu_fetch(cpu, cpu->PC++);
+            if (should_stall(cpu, cpu->eaddr, cpu->Y)) {
                 break;
             }
             /* fallthru */
         case 3:
             /* Discarded read from HH:(LL+Y) on delay cycle */
             if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
-                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddr.HH << 8) | ((cpu->eaddr.LL + cpu->Y) & 0xFF));
+                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->Y) & 0xFF));
             }
-            latch_address(cpu, cpu->eaddr.HHLL + cpu->Y);
+            latch_address(cpu, cpu->eaddr + cpu->Y);
             break;
         default:
             ep_assert(false);
@@ -733,18 +744,19 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         switch (cpu->instr.cycle) {
         case 1:
             /* Read zeropage offset */
-            cpu->DB = cpu_fetch(cpu, cpu->PC++);
+            cpu->iaddrl = cpu_fetch(cpu, cpu->PC++);
+            cpu->iaddrh = 0;
             break;
         case 2:
-            /* Dicarded read from 00:DB */
-            cpu_fetch_discard(cpu, cpu->DB);
+            /* Dicarded read from 00LL */
+            cpu_fetch_discard(cpu, cpu->iaddr);
             break;
         case 3:
-            cpu->eaddr.LL = cpu_fetch(cpu, (cpu->DB + cpu->X) & 0xFF);
+            cpu->eaddrl = cpu_fetch(cpu, (cpu->iaddr + cpu->X) & 0xFF);
             break;
         case 4:
-            cpu->eaddr.HH = cpu_fetch(cpu, (cpu->DB + cpu->X + 1) & 0xFF);
-            latch_address(cpu, cpu->eaddr.HHLL);
+            cpu->eaddrh = cpu_fetch(cpu, (cpu->iaddr + cpu->X + 1) & 0xFF);
+            latch_address(cpu, cpu->eaddr);
             break;
         default:
             ep_assert(false);
@@ -754,23 +766,24 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         switch (cpu->instr.cycle) {
         case 1:
             /* Read zeropage offset */
-            cpu->DB = cpu_fetch(cpu, cpu->PC++);
+            cpu->iaddrl = cpu_fetch(cpu, cpu->PC++);
+            cpu->iaddrh = 0;
             break;
         case 2:
-            cpu->eaddr.LL = cpu_fetch(cpu, cpu->DB++);
+            cpu->eaddrl = cpu_fetch(cpu, cpu->iaddr++ & 0xFF);
             break;
         case 3:
-            cpu->eaddr.HH = cpu_fetch(cpu, cpu->DB++);
-            if (should_stall(cpu, cpu->eaddr.HHLL, cpu->Y)) {
+            cpu->eaddrh = cpu_fetch(cpu, cpu->iaddr++ & 0xFF);
+            if (should_stall(cpu, cpu->eaddr, cpu->Y)) {
                 break;
             }
             /* fallthru */
         case 4:
             /* Discarded read from HH:(LL+Y) on delay cycle */
             if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
-                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddr.HH << 8) | ((cpu->eaddr.LL + cpu->Y) & 0xFF));
+                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->Y) & 0xFF));
             }
-            latch_address(cpu, cpu->eaddr.HHLL + cpu->Y);
+            latch_address(cpu, cpu->eaddr + cpu->Y);
             break;
         default:
             ep_assert(false);
@@ -779,16 +792,17 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_IND:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = cpu_fetch(cpu, cpu->PC++);
+            cpu->iaddrl = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            cpu->AB = (cpu_fetch(cpu, cpu->PC++) << 8) | cpu->DB;
+            cpu->iaddrh = cpu_fetch(cpu, cpu->PC++);
             break;
         case 3:
-            cpu->DB = cpu_fetch(cpu, cpu->AB++);
+            cpu->eaddrl = cpu_fetch(cpu, cpu->iaddr++);
             break;
         case 4:
-            latch_address(cpu, (cpu_fetch(cpu, cpu->AB) << 8) | cpu->DB);
+            cpu->eaddrh = cpu_fetch(cpu, cpu->iaddr++);
+            latch_address(cpu, cpu->eaddr);
             break;
         default:
             ep_assert(false);
@@ -808,25 +822,25 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_NOP:
         break;
     case MOS_UOP_LDA:
-        cpu->A = cpu_fetch(cpu, cpu->AB);
+        cpu->A = cpu_fetch(cpu, cpu->eaddr);
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_LDX:
-        cpu->X = cpu_fetch(cpu, cpu->AB);
+        cpu->X = cpu_fetch(cpu, cpu->eaddr);
         set_value_flags(cpu, cpu->X);
         break;
     case MOS_UOP_LDY:
-        cpu->Y = cpu_fetch(cpu, cpu->AB);
+        cpu->Y = cpu_fetch(cpu, cpu->eaddr);
         set_value_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_STA:
-        cpu_store(cpu, cpu->AB, cpu->A);
+        cpu_store(cpu, cpu->eaddr, cpu->A);
         break;
     case MOS_UOP_STX:
-        cpu_store(cpu, cpu->AB, cpu->X);
+        cpu_store(cpu, cpu->eaddr, cpu->X);
         break;
     case MOS_UOP_STY:
-        cpu_store(cpu, cpu->AB, cpu->Y);
+        cpu_store(cpu, cpu->eaddr, cpu->Y);
         break;
     case MOS_UOP_TAX:
         cpu->X = cpu->A;
@@ -916,16 +930,16 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_DEC:
         switch (cpu->instr.ncycles - cpu->instr.cycle) {
         case 3:
-            cpu->DB = cpu_fetch(cpu, cpu->AB);
+            cpu->db = cpu_fetch(cpu, cpu->eaddr);
             break;
         case 2:
             /* Extra write of the current value */
-            cpu_store(cpu, cpu->AB, cpu->DB);
-            cpu->DB--;
+            cpu_store(cpu, cpu->eaddr, cpu->db);
+            cpu->db--;
             break;
         case 1:
-            cpu_store(cpu, cpu->AB, cpu->DB);
-            set_value_flags(cpu, cpu->DB);
+            cpu_store(cpu, cpu->eaddr, cpu->db);
+            set_value_flags(cpu, cpu->db);
             break;
         default:
             ep_assert(false);
@@ -934,16 +948,16 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_INC:
         switch (cpu->instr.ncycles - cpu->instr.cycle) {
         case 3:
-            cpu->DB = cpu_fetch(cpu, cpu->AB);
+            cpu->db = cpu_fetch(cpu, cpu->eaddr);
             break;
         case 2:
             /* Extra write of the current value */
-            cpu_store(cpu, cpu->AB, cpu->DB);
-            cpu->DB++;
+            cpu_store(cpu, cpu->eaddr, cpu->db);
+            cpu->db++;
             break;
         case 1:
-            cpu_store(cpu, cpu->AB, cpu->DB);
-            set_value_flags(cpu, cpu->DB);
+            cpu_store(cpu, cpu->eaddr, cpu->db);
+            set_value_flags(cpu, cpu->db);
             break;
         default:
             ep_assert(false);
@@ -966,21 +980,21 @@ static void uop_exec(struct mos6502_cpu* cpu)
         set_value_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_ADC:
-        exec_addac(cpu, cpu_fetch(cpu, cpu->AB));
+        exec_addac(cpu, cpu_fetch(cpu, cpu->eaddr));
         break;
     case MOS_UOP_SBC:
-        exec_addac(cpu, ~cpu_fetch(cpu, cpu->AB));
+        exec_addac(cpu, ~cpu_fetch(cpu, cpu->eaddr));
         break;
     case MOS_UOP_AND:
-        cpu->A &= cpu_fetch(cpu, cpu->AB);
+        cpu->A &= cpu_fetch(cpu, cpu->eaddr);
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_EOR:
-        cpu->A ^= cpu_fetch(cpu, cpu->AB);
+        cpu->A ^= cpu_fetch(cpu, cpu->eaddr);
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_ORA:
-        cpu->A |= cpu_fetch(cpu, cpu->AB);
+        cpu->A |= cpu_fetch(cpu, cpu->eaddr);
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_ASL:
@@ -991,17 +1005,17 @@ static void uop_exec(struct mos6502_cpu* cpu)
         } else {
             switch (cpu->instr.ncycles - cpu->instr.cycle) {
             case 3:
-                cpu->DB = cpu_fetch(cpu, cpu->AB);
+                cpu->db = cpu_fetch(cpu, cpu->eaddr);
                 break;
             case 2:
                 /* Extra write of the current value */
-                cpu_store(cpu, cpu->AB, cpu->DB);
-                change_flags(cpu, SR_C, cpu->DB & 0x80 ? SR_C : 0);
-                cpu->DB <<= 1;
-                set_value_flags(cpu, cpu->DB);
+                cpu_store(cpu, cpu->eaddr, cpu->db);
+                change_flags(cpu, SR_C, cpu->db & 0x80 ? SR_C : 0);
+                cpu->db <<= 1;
+                set_value_flags(cpu, cpu->db);
                 break;
             case 1:
-                cpu_store(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->eaddr, cpu->db);
                 break;
             default:
                 ep_assert(false);
@@ -1016,17 +1030,17 @@ static void uop_exec(struct mos6502_cpu* cpu)
         } else {
             switch (cpu->instr.ncycles - cpu->instr.cycle) {
             case 3:
-                cpu->DB = cpu_fetch(cpu, cpu->AB);
+                cpu->db = cpu_fetch(cpu, cpu->eaddr);
                 break;
             case 2:
                 /* Extra write of the current value */
-                cpu_store(cpu, cpu->AB, cpu->DB);
-                change_flags(cpu, SR_C, cpu->DB & 0x01 ? SR_C : 0);
-                cpu->DB >>= 1;
-                set_value_flags(cpu, cpu->DB);
+                cpu_store(cpu, cpu->eaddr, cpu->db);
+                change_flags(cpu, SR_C, cpu->db & 0x01 ? SR_C : 0);
+                cpu->db >>= 1;
+                set_value_flags(cpu, cpu->db);
                 break;
             case 1:
-                cpu_store(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->eaddr, cpu->db);
                 break;
             default:
                 ep_assert(false);
@@ -1043,18 +1057,18 @@ static void uop_exec(struct mos6502_cpu* cpu)
             bool carry;
             switch (cpu->instr.ncycles - cpu->instr.cycle) {
             case 3:
-                cpu->DB = cpu_fetch(cpu, cpu->AB);
+                cpu->db = cpu_fetch(cpu, cpu->eaddr);
                 break;
             case 2:
                 /* Extra write of the current value */
-                cpu_store(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->eaddr, cpu->db);
                 carry = !!(cpu->P & SR_C);
-                change_flags(cpu, SR_C, cpu->DB & 0x80 ? SR_C : 0);
-                cpu->DB = (cpu->DB << 1) | carry;
-                set_value_flags(cpu, cpu->DB);
+                change_flags(cpu, SR_C, cpu->db & 0x80 ? SR_C : 0);
+                cpu->db = (cpu->db << 1) | carry;
+                set_value_flags(cpu, cpu->db);
                 break;
             case 1:
-                cpu_store(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->eaddr, cpu->db);
                 break;
             default:
                 ep_assert(false);
@@ -1071,18 +1085,18 @@ static void uop_exec(struct mos6502_cpu* cpu)
             bool carry;
             switch (cpu->instr.ncycles - cpu->instr.cycle) {
             case 3:
-                cpu->DB = cpu_fetch(cpu, cpu->AB);
+                cpu->db = cpu_fetch(cpu, cpu->eaddr);
                 break;
             case 2:
                 /* Extra write of the current value */
-                cpu_store(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->eaddr, cpu->db);
                 carry = !!(cpu->P & SR_C);
-                change_flags(cpu, SR_C, cpu->DB & 0x01 ? SR_C : 0);
-                cpu->DB = (cpu->DB >> 1) | (carry << 7);
-                set_value_flags(cpu, cpu->DB);
+                change_flags(cpu, SR_C, cpu->db & 0x01 ? SR_C : 0);
+                cpu->db = (cpu->db >> 1) | (carry << 7);
+                set_value_flags(cpu, cpu->db);
                 break;
             case 1:
-                cpu_store(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->eaddr, cpu->db);
                 break;
             default:
                 ep_assert(false);
@@ -1113,27 +1127,27 @@ static void uop_exec(struct mos6502_cpu* cpu)
         cpu->P |= SR_I;
         break;
     case MOS_UOP_BIT:
-        cpu->DB = cpu_fetch(cpu, cpu->AB);
-        change_flags(cpu, SR_N | SR_Z | SR_V, (cpu->DB == cpu->A ? SR_Z : 0) | (cpu->DB & 0xC0));
+        cpu->db = cpu_fetch(cpu, cpu->eaddr);
+        change_flags(cpu, SR_N | SR_Z | SR_V, (cpu->db == cpu->A ? SR_Z : 0) | (cpu->db & 0xC0));
         break;
     case MOS_UOP_CMP:
-        cpu->DB = cpu_fetch(cpu, cpu->AB);
-        cpu->A = exec_adda3(cpu, cpu->A, ~cpu->DB, 1);
+        cpu->db = cpu_fetch(cpu, cpu->eaddr);
+        cpu->A = exec_adda3(cpu, cpu->A, ~cpu->db, 1);
         break;
     case MOS_UOP_CPX:
-        cpu->DB = cpu_fetch(cpu, cpu->AB);
-        cpu->X = exec_adda3(cpu, cpu->X, ~cpu->DB, 1);
+        cpu->db = cpu_fetch(cpu, cpu->eaddr);
+        cpu->X = exec_adda3(cpu, cpu->X, ~cpu->db, 1);
         break;
     case MOS_UOP_CPY:
-        cpu->DB = cpu_fetch(cpu, cpu->AB);
-        cpu->Y = exec_adda3(cpu, cpu->Y, ~cpu->DB, 1);
+        cpu->db = cpu_fetch(cpu, cpu->eaddr);
+        cpu->Y = exec_adda3(cpu, cpu->Y, ~cpu->db, 1);
         break;
 
     #define MOS_EXEC_BR(_cond_) \
         switch (cpu->instr.cycle) { \
         case 1: \
             /* Fetch offset, increment PC, check condition, insert extra cycle if branch taken */ \
-            cpu->DB = cpu_fetch(cpu, cpu->PC++); \
+            cpu->db = cpu_fetch(cpu, cpu->PC++); \
             if (_cond_) { \
                 cpu->instr.ncycles++; \
             } \
@@ -1141,15 +1155,15 @@ static void uop_exec(struct mos6502_cpu* cpu)
         case 2: \
             /* Branch taken: insert cross-page delay if needed */ \
             /* TODO: there is an external fetch from PC+2 here that is discarded */ \
-            if (((cpu->PC + (int8_t)cpu->DB) & 0xFF00) != cpu->PCH) { \
+            if (((cpu->PC + (int8_t)cpu->db) & 0xFF00) != cpu->PCH) { \
                 cpu->instr.ncycles++; \
             } \
-            cpu->PCL += (int8_t)cpu->DB; \
+            cpu->PCL += (int8_t)cpu->db; \
             break; \
         case 3: \
             /* Branch taken: xpage delay cycle */ \
             /* TODO: there is an external fetch from old PCH/new PCL here that is discarded */ \
-            cpu->PCH += (cpu->DB & 0x80 ? -1 : +1); \
+            cpu->PCH += (cpu->db & 0x80 ? -1 : +1); \
             break; \
         default: \
             ep_assert(false); \
@@ -1183,13 +1197,13 @@ static void uop_exec(struct mos6502_cpu* cpu)
     #undef MOS_EXEC_BR
 
     case MOS_UOP_JMP:
-        cpu->PC = cpu->AB;
+        cpu->PC = cpu->eaddr;
         break;
     case MOS_UOP_JSR:
         /* JSR is not following ordinary ABS addressing mode, so it's hand-coded */
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = cpu_fetch(cpu, cpu->PC++);
+            cpu->db = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
             /* Stack write stall */
@@ -1202,7 +1216,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
             cpu_push(cpu, cpu->PCL);
             break;
         case 5:
-            latch_address(cpu, (cpu_fetch(cpu, cpu->PC) << 8) | cpu->DB);
+            latch_address(cpu, (cpu_fetch(cpu, cpu->PC) << 8) | cpu->db);
             break;
         default:
             ep_assert(false);
