@@ -114,6 +114,8 @@ struct mos6502_instr
     #define MOS_CTRL_PC_ADDRESS_LATCH (1u << 0)
     /* This is a write instruction and will take an extra cycle */
     #define MOS_CTRL_RW (1u << 1)
+    /* Insert a cross page delay cycle signal */
+    #define MOS_CTRL_XPAGE_DELAY (1u << 2)
     /* Control logic bits */
     uint8_t ctrlbits;
 };
@@ -139,6 +141,20 @@ struct mos6502_pa_range
         mos_word_t* mapped;
         mos6502_mmio_handler handler;
     };
+};
+
+struct mos6502_bus_trace
+{
+    uint64_t cycle;
+    mos_pa_t addr;
+    union {
+        uint8_t as_u8;
+        struct {
+            uint8_t rw:1;
+            uint8_t discard:1;
+            uint8_t _unused:6;
+        };
+    } flags;
 };
 
 struct mos6502_cpu
@@ -168,6 +184,15 @@ struct mos6502_cpu
     mos_word_t SP;
     mos_word_t DB;
 
+    /* Internal registers for effective address storage */
+    union {
+        mos_pa_t HHLL;
+        struct {
+            mos_word_t LL;
+            mos_word_t HH;
+        };
+    } eaddr;
+
     bool halted;
     enum mos6502_tstate tstate;
 
@@ -177,6 +202,13 @@ struct mos6502_cpu
 
     size_t nregions;
     struct mos6502_pa_range pa_map[8];
+
+#ifdef EP_CONFIG_TEST
+    /* Bus trace records last instruction externally-visible effects */
+    #define EP_TEST_BUS_TRACE_SIZE 16
+    struct mos6502_bus_trace bus_trace[EP_TEST_BUS_TRACE_SIZE];
+    uint8_t bus_trace_head;
+#endif
 };
 
 #define _MOS_OP_CTRLBITS(_opc_, _mnemonic_, _mode_, _ncycles_, _ctrlbits_) \
@@ -391,6 +423,47 @@ static const struct mos6502_instr mos_opcodes[] =
     MOS_OP(0x70, BVS, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
 };
 
+#ifdef EP_CONFIG_TEST
+
+static void reset_bus_trace(struct mos6502_cpu* cpu)
+{
+    memset(cpu->bus_trace, 0, sizeof(cpu->bus_trace));
+    cpu->bus_trace_head = 0;
+}
+
+static void record_bus_trace(struct mos6502_cpu* cpu, mos_pa_t addr, bool rw, bool discard)
+{
+    // Writes can't be discarded
+    ep_assert(!rw || !discard);
+
+    struct mos6502_bus_trace* trace = &cpu->bus_trace[cpu->bus_trace_head];
+    cpu->bus_trace_head = (cpu->bus_trace_head + 1) % EP_TEST_BUS_TRACE_SIZE;
+
+    trace->cycle = cpu->cycle;
+    trace->addr = addr;
+    trace->flags.rw = !!rw;
+    trace->flags.discard = !!discard;
+
+    ep_trace("trace entry %u: cycle %lu, addr 0x%04hx, flags 0x%02hhx", cpu->bus_trace_head - 1, trace->cycle, trace->addr, trace->flags.as_u8);
+}
+
+#else
+
+static inline void reset_bus_trace(struct mos6502_cpu* cpu)
+{
+    (void) cpu;
+}
+
+static inline void record_bus_trace(struct mos6502_cpu* cpu, mos_pa_t addr, bool rw, bool discard)
+{
+    (void) cpu;
+    (void) addr;
+    (void) rw;
+    (void) discard;
+}
+
+#endif
+
 static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
 {
     /* TODO: this can be a binary search, but the amount of regions is small enough for now */
@@ -405,7 +478,7 @@ static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t
     ep_verify(false);
 }
 
-static mos_word_t load_word(struct mos6502_cpu* cpu, mos_pa_t pa)
+static mos_word_t fetch_word(struct mos6502_cpu* cpu, mos_pa_t pa)
 {
     const struct mos6502_pa_range* r = map_addr(cpu, pa);
     ep_verify(r);
@@ -447,13 +520,43 @@ static mos_word_t pop_word(struct mos6502_cpu* cpu)
 
     /* Stack wraps around inside the segment */
     cpu->SP++;
-    return load_word(cpu, 0x0100 | cpu->SP);
+    return fetch_word(cpu, 0x0100 | cpu->SP);
+}
+
+static inline mos_word_t cpu_fetch(struct mos6502_cpu* cpu, mos_pa_t pa)
+{
+    record_bus_trace(cpu, pa, false, false);
+    return fetch_word(cpu, pa);
+}
+
+static inline void cpu_fetch_discard(struct mos6502_cpu* cpu, mos_pa_t pa)
+{
+    record_bus_trace(cpu, pa, false, true);
+    (void) fetch_word(cpu, pa);
+}
+
+static void cpu_store(struct mos6502_cpu* cpu, mos_pa_t pa, mos_word_t val)
+{
+    record_bus_trace(cpu, pa, true, false);
+    store_word(cpu, pa, val);
+}
+
+static inline mos_word_t cpu_pop(struct mos6502_cpu* cpu)
+{
+    record_bus_trace(cpu, (0x0100 | cpu->SP) + 1, false, false);
+    return pop_word(cpu);
+}
+
+static inline void cpu_push(struct mos6502_cpu* cpu, mos_word_t val)
+{
+    record_bus_trace(cpu, 0x0100 | cpu->SP, true, false);
+    push_word(cpu, val);
 }
 
 static void fetch_next_instr(struct mos6502_cpu* cpu)
 {
     /* TODO: unimplemented instruction exception? */
-    cpu->instr = mos_opcodes[load_word(cpu, cpu->PC++)];
+    cpu->instr = mos_opcodes[cpu_fetch(cpu, cpu->PC++)];
 }
 
 static inline void latch_address(struct mos6502_cpu* cpu, mos_pa_t addr)
@@ -520,6 +623,7 @@ static inline bool should_stall(struct mos6502_cpu *cpu, mos_pa_t base, uint8_t 
     /* insert 1 cycle delay if this is an xpage refrence*/
     if (is_xpage_ref(base, offset)) {
         cpu->instr.ncycles++;
+        cpu->instr.ctrlbits |= MOS_CTRL_XPAGE_DELAY;
         return true;
     }
 
@@ -537,14 +641,16 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_AM_Z:
         ep_assert(cpu->instr.cycle == 1);
-        latch_address(cpu, load_word(cpu, cpu->PC++));
+        latch_address(cpu, cpu_fetch(cpu, cpu->PC++));
         break;
     case MOS_AM_ZX:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            cpu->DB = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
+            /* Discarded read from 00LL */
+            cpu_fetch_discard(cpu, cpu->DB);
             /* Wrap around on overflow */
             latch_address(cpu, (cpu->DB + cpu->X) & 0xFF);
             break;
@@ -555,9 +661,11 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ZY:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            cpu->DB = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
+            /* Discarded read from 00LL */
+            cpu_fetch_discard(cpu, cpu->DB);
             /* Wrap around on overflow */
             latch_address(cpu, (cpu->DB + cpu->Y) & 0xFF);
             break;
@@ -568,10 +676,10 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ABS:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            cpu->DB = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            latch_address(cpu, ((mos_pa_t)load_word(cpu, cpu->PC++) << 8) | cpu->DB);
+            latch_address(cpu, ((mos_pa_t)cpu_fetch(cpu, cpu->PC++) << 8) | cpu->DB);
             break;
         default:
             ep_assert(false);
@@ -580,16 +688,20 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ABSX:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            cpu->eaddr.LL = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            cpu->AB = ((mos_pa_t)load_word(cpu, cpu->PC++) << 8) | cpu->DB;
-            if (should_stall(cpu, cpu->AB, cpu->X)) {
+            cpu->eaddr.HH = cpu_fetch(cpu, cpu->PC++);
+            if (should_stall(cpu, cpu->eaddr.HHLL, cpu->X)) {
                 break;
             }
             /* fallthru */
         case 3:
-            latch_address(cpu, cpu->AB + cpu->X);
+            /* Discarded read from HH:(LL+X) on delay cycle */
+            if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
+                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddr.HH << 8) | ((cpu->eaddr.LL + cpu->X) & 0xFF));
+            }
+            latch_address(cpu, cpu->eaddr.HHLL + cpu->X);
             break;
         default:
             ep_assert(false);
@@ -598,16 +710,20 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_ABSY:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            cpu->eaddr.LL = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            cpu->AB = ((mos_pa_t)load_word(cpu, cpu->PC++) << 8) | cpu->DB;
-            if (should_stall(cpu, cpu->AB, cpu->Y)) {
+            cpu->eaddr.HH = cpu_fetch(cpu, cpu->PC++);
+            if (should_stall(cpu, cpu->eaddr.HHLL, cpu->Y)) {
                 break;
             }
             /* fallthru */
         case 3:
-            latch_address(cpu, cpu->AB + cpu->Y);
+            /* Discarded read from HH:(LL+Y) on delay cycle */
+            if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
+                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddr.HH << 8) | ((cpu->eaddr.LL + cpu->Y) & 0xFF));
+            }
+            latch_address(cpu, cpu->eaddr.HHLL + cpu->Y);
             break;
         default:
             ep_assert(false);
@@ -616,17 +732,19 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_INDX:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            /* Read zeropage offset */
+            cpu->DB = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            /* Address might wrap around which is what we want here */
-            cpu->DB += cpu->X;
+            /* Dicarded read from 00:DB */
+            cpu_fetch_discard(cpu, cpu->DB);
             break;
         case 3:
-            cpu->AB = load_word(cpu, cpu->DB++);
+            cpu->eaddr.LL = cpu_fetch(cpu, (cpu->DB + cpu->X) & 0xFF);
             break;
         case 4:
-            latch_address(cpu, ((mos_pa_t)load_word(cpu, cpu->DB) << 8) | cpu->AB);
+            cpu->eaddr.HH = cpu_fetch(cpu, (cpu->DB + cpu->X + 1) & 0xFF);
+            latch_address(cpu, cpu->eaddr.HHLL);
             break;
         default:
             ep_assert(false);
@@ -635,19 +753,24 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_INDY:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            /* Read zeropage offset */
+            cpu->DB = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            cpu->AB = load_word(cpu, cpu->DB++);
+            cpu->eaddr.LL = cpu_fetch(cpu, cpu->DB++);
             break;
         case 3:
-            cpu->AB = ((mos_pa_t)load_word(cpu, cpu->DB) << 8) | cpu->AB;
-            if (should_stall(cpu, cpu->AB, cpu->Y)) {
+            cpu->eaddr.HH = cpu_fetch(cpu, cpu->DB++);
+            if (should_stall(cpu, cpu->eaddr.HHLL, cpu->Y)) {
                 break;
             }
             /* fallthru */
-        case 4: /* delay cycle */
-            latch_address(cpu, cpu->AB + cpu->Y);
+        case 4:
+            /* Discarded read from HH:(LL+Y) on delay cycle */
+            if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
+                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddr.HH << 8) | ((cpu->eaddr.LL + cpu->Y) & 0xFF));
+            }
+            latch_address(cpu, cpu->eaddr.HHLL + cpu->Y);
             break;
         default:
             ep_assert(false);
@@ -656,16 +779,16 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
     case MOS_AM_IND:
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            cpu->DB = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
-            cpu->AB = (load_word(cpu, cpu->PC++) << 8) | cpu->DB;
+            cpu->AB = (cpu_fetch(cpu, cpu->PC++) << 8) | cpu->DB;
             break;
         case 3:
-            cpu->DB = load_word(cpu, cpu->AB++);
+            cpu->DB = cpu_fetch(cpu, cpu->AB++);
             break;
         case 4:
-            latch_address(cpu, (load_word(cpu, cpu->AB) << 8) | cpu->DB);
+            latch_address(cpu, (cpu_fetch(cpu, cpu->AB) << 8) | cpu->DB);
             break;
         default:
             ep_assert(false);
@@ -685,25 +808,25 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_NOP:
         break;
     case MOS_UOP_LDA:
-        cpu->A = load_word(cpu, cpu->AB);
+        cpu->A = cpu_fetch(cpu, cpu->AB);
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_LDX:
-        cpu->X = load_word(cpu, cpu->AB);
+        cpu->X = cpu_fetch(cpu, cpu->AB);
         set_value_flags(cpu, cpu->X);
         break;
     case MOS_UOP_LDY:
-        cpu->Y = load_word(cpu, cpu->AB);
+        cpu->Y = cpu_fetch(cpu, cpu->AB);
         set_value_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_STA:
-        store_word(cpu, cpu->AB, cpu->A);
+        cpu_store(cpu, cpu->AB, cpu->A);
         break;
     case MOS_UOP_STX:
-        store_word(cpu, cpu->AB, cpu->X);
+        cpu_store(cpu, cpu->AB, cpu->X);
         break;
     case MOS_UOP_STY:
-        store_word(cpu, cpu->AB, cpu->Y);
+        cpu_store(cpu, cpu->AB, cpu->Y);
         break;
     case MOS_UOP_TAX:
         cpu->X = cpu->A;
@@ -732,9 +855,11 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_PHA:
         switch (cpu->instr.cycle) {
         case 1:
+            /* Discarded read at PC+1 */
+            cpu_fetch_discard(cpu, cpu->PC);
             break;
         case 2:
-            push_word(cpu, cpu->A);
+            cpu_push(cpu, cpu->A);
             break;
         default:
             ep_assert(false);
@@ -743,11 +868,15 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_PLA:
         switch (cpu->instr.cycle) {
         case 1:
+            /* Discarded read at PC+1 */
+            cpu_fetch_discard(cpu, cpu->PC);
             break;
         case 2:
+            /* Discarded read at SP */
+            cpu_fetch_discard(cpu, 0x0100 | cpu->SP);
             break;
         case 3:
-            cpu->A = pop_word(cpu);
+            cpu->A = cpu_pop(cpu);
             set_value_flags(cpu, cpu->A);
             break;
         default:
@@ -757,9 +886,11 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_PHP:
         switch (cpu->instr.cycle) {
         case 1:
+            /* Discarded read at PC+1 */
+            cpu_fetch_discard(cpu, cpu->PC);
             break;
         case 2:
-            push_word(cpu, cpu->P | SR_B | SR_U);
+            cpu_push(cpu, cpu->P | SR_B | SR_U);
             break;
         default:
             ep_assert(false);
@@ -768,11 +899,15 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_PLP:
         switch (cpu->instr.cycle) {
         case 1:
+            /* Discarded read at PC+1 */
+            cpu_fetch_discard(cpu, cpu->PC);
             break;
         case 2:
+            /* Discarded read at SP */
+            cpu_fetch_discard(cpu, 0x0100 | cpu->SP);
             break;
         case 3:
-            cpu->P = (cpu->P & (SR_B | SR_U)) | (pop_word(cpu) & ~(SR_B | SR_U));
+            cpu->P = (cpu->P & (SR_B | SR_U)) | (cpu_pop(cpu) & ~(SR_B | SR_U));
             break;
         default:
             ep_assert(false);
@@ -781,13 +916,15 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_DEC:
         switch (cpu->instr.ncycles - cpu->instr.cycle) {
         case 3:
-            cpu->DB = load_word(cpu, cpu->AB);
+            cpu->DB = cpu_fetch(cpu, cpu->AB);
             break;
         case 2:
+            /* Extra write of the current value */
+            cpu_store(cpu, cpu->AB, cpu->DB);
             cpu->DB--;
             break;
         case 1:
-            store_word(cpu, cpu->AB, cpu->DB);
+            cpu_store(cpu, cpu->AB, cpu->DB);
             set_value_flags(cpu, cpu->DB);
             break;
         default:
@@ -797,13 +934,15 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_INC:
         switch (cpu->instr.ncycles - cpu->instr.cycle) {
         case 3:
-            cpu->DB = load_word(cpu, cpu->AB);
+            cpu->DB = cpu_fetch(cpu, cpu->AB);
             break;
         case 2:
+            /* Extra write of the current value */
+            cpu_store(cpu, cpu->AB, cpu->DB);
             cpu->DB++;
             break;
         case 1:
-            store_word(cpu, cpu->AB, cpu->DB);
+            cpu_store(cpu, cpu->AB, cpu->DB);
             set_value_flags(cpu, cpu->DB);
             break;
         default:
@@ -827,21 +966,21 @@ static void uop_exec(struct mos6502_cpu* cpu)
         set_value_flags(cpu, cpu->Y);
         break;
     case MOS_UOP_ADC:
-        exec_addac(cpu, load_word(cpu, cpu->AB));
+        exec_addac(cpu, cpu_fetch(cpu, cpu->AB));
         break;
     case MOS_UOP_SBC:
-        exec_addac(cpu, ~load_word(cpu, cpu->AB));
+        exec_addac(cpu, ~cpu_fetch(cpu, cpu->AB));
         break;
     case MOS_UOP_AND:
-        cpu->A &= load_word(cpu, cpu->AB);
+        cpu->A &= cpu_fetch(cpu, cpu->AB);
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_EOR:
-        cpu->A ^= load_word(cpu, cpu->AB);
+        cpu->A ^= cpu_fetch(cpu, cpu->AB);
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_ORA:
-        cpu->A |= load_word(cpu, cpu->AB);
+        cpu->A |= cpu_fetch(cpu, cpu->AB);
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_ASL:
@@ -852,15 +991,17 @@ static void uop_exec(struct mos6502_cpu* cpu)
         } else {
             switch (cpu->instr.ncycles - cpu->instr.cycle) {
             case 3:
-                cpu->DB = load_word(cpu, cpu->AB);
+                cpu->DB = cpu_fetch(cpu, cpu->AB);
                 break;
             case 2:
+                /* Extra write of the current value */
+                cpu_store(cpu, cpu->AB, cpu->DB);
                 change_flags(cpu, SR_C, cpu->DB & 0x80 ? SR_C : 0);
                 cpu->DB <<= 1;
                 set_value_flags(cpu, cpu->DB);
                 break;
             case 1:
-                store_word(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->AB, cpu->DB);
                 break;
             default:
                 ep_assert(false);
@@ -875,15 +1016,17 @@ static void uop_exec(struct mos6502_cpu* cpu)
         } else {
             switch (cpu->instr.ncycles - cpu->instr.cycle) {
             case 3:
-                cpu->DB = load_word(cpu, cpu->AB);
+                cpu->DB = cpu_fetch(cpu, cpu->AB);
                 break;
             case 2:
+                /* Extra write of the current value */
+                cpu_store(cpu, cpu->AB, cpu->DB);
                 change_flags(cpu, SR_C, cpu->DB & 0x01 ? SR_C : 0);
                 cpu->DB >>= 1;
                 set_value_flags(cpu, cpu->DB);
                 break;
             case 1:
-                store_word(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->AB, cpu->DB);
                 break;
             default:
                 ep_assert(false);
@@ -900,16 +1043,18 @@ static void uop_exec(struct mos6502_cpu* cpu)
             bool carry;
             switch (cpu->instr.ncycles - cpu->instr.cycle) {
             case 3:
-                cpu->DB = load_word(cpu, cpu->AB);
+                cpu->DB = cpu_fetch(cpu, cpu->AB);
                 break;
             case 2:
+                /* Extra write of the current value */
+                cpu_store(cpu, cpu->AB, cpu->DB);
                 carry = !!(cpu->P & SR_C);
                 change_flags(cpu, SR_C, cpu->DB & 0x80 ? SR_C : 0);
                 cpu->DB = (cpu->DB << 1) | carry;
                 set_value_flags(cpu, cpu->DB);
                 break;
             case 1:
-                store_word(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->AB, cpu->DB);
                 break;
             default:
                 ep_assert(false);
@@ -926,16 +1071,18 @@ static void uop_exec(struct mos6502_cpu* cpu)
             bool carry;
             switch (cpu->instr.ncycles - cpu->instr.cycle) {
             case 3:
-                cpu->DB = load_word(cpu, cpu->AB);
+                cpu->DB = cpu_fetch(cpu, cpu->AB);
                 break;
             case 2:
+                /* Extra write of the current value */
+                cpu_store(cpu, cpu->AB, cpu->DB);
                 carry = !!(cpu->P & SR_C);
                 change_flags(cpu, SR_C, cpu->DB & 0x01 ? SR_C : 0);
                 cpu->DB = (cpu->DB >> 1) | (carry << 7);
                 set_value_flags(cpu, cpu->DB);
                 break;
             case 1:
-                store_word(cpu, cpu->AB, cpu->DB);
+                cpu_store(cpu, cpu->AB, cpu->DB);
                 break;
             default:
                 ep_assert(false);
@@ -966,19 +1113,19 @@ static void uop_exec(struct mos6502_cpu* cpu)
         cpu->P |= SR_I;
         break;
     case MOS_UOP_BIT:
-        cpu->DB = load_word(cpu, cpu->AB);
+        cpu->DB = cpu_fetch(cpu, cpu->AB);
         change_flags(cpu, SR_N | SR_Z | SR_V, (cpu->DB == cpu->A ? SR_Z : 0) | (cpu->DB & 0xC0));
         break;
     case MOS_UOP_CMP:
-        cpu->DB = load_word(cpu, cpu->AB);
+        cpu->DB = cpu_fetch(cpu, cpu->AB);
         cpu->A = exec_adda3(cpu, cpu->A, ~cpu->DB, 1);
         break;
     case MOS_UOP_CPX:
-        cpu->DB = load_word(cpu, cpu->AB);
+        cpu->DB = cpu_fetch(cpu, cpu->AB);
         cpu->X = exec_adda3(cpu, cpu->X, ~cpu->DB, 1);
         break;
     case MOS_UOP_CPY:
-        cpu->DB = load_word(cpu, cpu->AB);
+        cpu->DB = cpu_fetch(cpu, cpu->AB);
         cpu->Y = exec_adda3(cpu, cpu->Y, ~cpu->DB, 1);
         break;
 
@@ -986,7 +1133,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         switch (cpu->instr.cycle) { \
         case 1: \
             /* Fetch offset, increment PC, check condition, insert extra cycle if branch taken */ \
-            cpu->DB = load_word(cpu, cpu->PC++); \
+            cpu->DB = cpu_fetch(cpu, cpu->PC++); \
             if (_cond_) { \
                 cpu->instr.ncycles++; \
             } \
@@ -1042,19 +1189,20 @@ static void uop_exec(struct mos6502_cpu* cpu)
         /* JSR is not following ordinary ABS addressing mode, so it's hand-coded */
         switch (cpu->instr.cycle) {
         case 1:
-            cpu->DB = load_word(cpu, cpu->PC++);
+            cpu->DB = cpu_fetch(cpu, cpu->PC++);
             break;
         case 2:
             /* Stack write stall */
+            cpu_fetch_discard(cpu, 0x0100 | cpu->SP);
             break;
         case 3:
-            push_word(cpu, cpu->PCH);
+            cpu_push(cpu, cpu->PCH);
             break;
         case 4:
-            push_word(cpu, cpu->PCL);
+            cpu_push(cpu, cpu->PCL);
             break;
         case 5:
-            latch_address(cpu, (load_word(cpu, cpu->PC) << 8) | cpu->DB);
+            latch_address(cpu, (cpu_fetch(cpu, cpu->PC) << 8) | cpu->DB);
             break;
         default:
             ep_assert(false);
@@ -1063,18 +1211,22 @@ static void uop_exec(struct mos6502_cpu* cpu)
     case MOS_UOP_RTS:
         switch (cpu->instr.cycle) {
         case 1:
-            /* TODO: discarded external read from PC + 1 */
+            /* Discarded external read from PC + 1 */
+            cpu_fetch_discard(cpu, cpu->PC);
             break;
         case 2:
             /* Stack read stall */
+            cpu_fetch_discard(cpu, 0x0100 | cpu->SP);
             break;
         case 3:
-            cpu->PCL = pop_word(cpu);
+            cpu->PCL = cpu_pop(cpu);
             break;
         case 4:
-            cpu->PCH = pop_word(cpu);
+            cpu->PCH = cpu_pop(cpu);
             break;
         case 5:
+            /* Discarded read from unmodified PC */
+            cpu_fetch_discard(cpu, cpu->PC);
             /* Correction for the PC pushed by JSR */
             cpu->PC += 1;
             break;
@@ -1120,7 +1272,7 @@ void mos6502_reset(struct mos6502_cpu* cpu)
     ep_verify(cpu != NULL);
 
     /* A, X, Y survive reset */
-    cpu->PC = (mos_pa_t)(load_word(cpu, 0xfffd) << 8) | load_word(cpu, 0xfffc);
+    cpu->PC = (mos_pa_t)(cpu_fetch(cpu, 0xfffd) << 8) | cpu_fetch(cpu, 0xfffc);
     cpu->SP = 0xfd;
     cpu->P = SR_I | SR_U;
     cpu->halted = false;
@@ -1129,6 +1281,8 @@ void mos6502_reset(struct mos6502_cpu* cpu)
     cpu->cycle = 7;
     cpu->total_retired = 0;
     cpu->tstate = MOS_TSTATE_FETCH;
+
+    reset_bus_trace(cpu);
 }
 
 void mos6502_map_ram_region(struct mos6502_cpu* cpu, mos_pa_t base, size_t size, void* mapped)
@@ -1151,7 +1305,7 @@ void mos6502_map_ram_region(struct mos6502_cpu* cpu, mos_pa_t base, size_t size,
 mos_word_t mos6502_load_word(struct mos6502_cpu* cpu, mos_pa_t addr)
 {
     ep_verify(cpu);
-    return load_word(cpu, addr);
+    return fetch_word(cpu, addr);
 }
 
 void mos6502_store_word(struct mos6502_cpu* cpu, mos_pa_t addr, mos_word_t val)
@@ -1296,6 +1450,23 @@ static uint64_t run_test_cpu(struct mos6502_cpu* cpu)
     } while (!cpu->halted && cpu->total_retired == retired);
 
     return (cpu->cycle - cycles);
+}
+
+static void validate_bus_trace(struct mos6502_cpu* cpu, const struct mos6502_bus_trace* expected, size_t size)
+{
+    ep_assert(size <= EP_TEST_BUS_TRACE_SIZE);
+
+    // Expected trace is built in chronological order, while the cpu recorded trace is in reverse.
+    uint8_t pos = cpu->bus_trace_head;
+    pos = (pos < size ? EP_TEST_BUS_TRACE_SIZE - size + pos : pos - size);
+    for (size_t i = 0; i < size; i++, pos++) {
+        const struct mos6502_bus_trace* cpu_trace = &cpu->bus_trace[pos % EP_TEST_BUS_TRACE_SIZE];
+        ep_verify_equal(expected[i].cycle, cpu_trace->cycle);
+        ep_verify_equal(expected[i].addr, cpu_trace->addr);
+        ep_verify_equal(!!expected[i].flags.rw, !!cpu_trace->flags.rw);
+        ep_verify_equal(!!expected[i].flags.discard, !!cpu_trace->flags.discard);
+        ep_verify(!cpu_trace->flags.rw || !cpu_trace->flags.discard);
+    }
 }
 
 ep_test(test_reset)

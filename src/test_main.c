@@ -141,6 +141,9 @@ int main(int argc, char** argv)
         te++;
         testnum++;
 
+        if (!res) {
+            exit(EXIT_FAILURE);
+        }
     }
 
     printf("\n---\n");
