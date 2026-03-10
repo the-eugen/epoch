@@ -206,11 +206,11 @@ jump_templates: dict[AddressModeId, list[ModeTemplate]] = {
             trace   = lambda rw, ctrlbits = 0: [(0x0000, BusTraceRead), (0x0001, BusTraceRead), (0x0002, BusTraceRead), (0x1001, BusTraceRead), (0x1002, BusTraceRead)],
         ),
     ],
+    # This is used for branching instructions
     AddressModeId.Relative: [
         ModeTemplate(
             apply   = lambda op, operands: [(0x0000, [op, operands['Memory'] & 0xFF])],
-            eaddr   = 0x1001,
-            trace   = lambda rw, ctrlbits = 0: [(0x0000, BusTraceRead), (0x0001, BusTraceRead)],
+            eaddr   = 0x0001,
         ),
     ],
     # This is used for the RTS instruction
@@ -254,15 +254,28 @@ def flag_v(v1: int, v2: int, carry: bool):
     # 2's complement signed overflow rule: when operand signs are equal and the result sign differs
     return StatusFlags.V if (s1 == s2) and (sr != s1) else 0
 
-def dec_u8(v: byte): return (v - 1) & 0xFF;
-def inc_u8(v: byte): return (v + 1) & 0xFF;
+def sub_u8(v: byte, d: int): return (v - d) & 0xFF
+def dec_u8(v: byte): return sub_u8(v, 1)
+
+def add_u8(v: byte, d: int): return (v + d) & 0xFF
+def inc_u8(v: byte): return add_u8(v, 1)
 
 def data_move_flags(v: int): return flag_z(v) | flag_n(v)
+
+def BranchInstruction(mnemonic, opcode, condition, flags_test):
+    cond = condition
+    return Instruction(
+        mnemonic  = mnemonic,
+        modes     = {AddressModeId.Relative: (opcode, 2)},
+        semantics = branch_semantics(cond),
+        testcases = {'Memory':[0x08, 0x88], 'Flags': flags_test},
+        templates = jump_templates,
+        bus_trace = branch_bus_trace(cond)
+    )
 
 def branch_semantics(predicate):
     def semantics(tc):
         baseaddr = 0x0002
-        # offset is signed
         offset = ((tc['Memory'] ^ 0x80) - 0x80) if predicate(tc) else 0
         destaddr = (baseaddr + offset) & 0xFFFF
         timing = 2 if not predicate(tc) else 3 if (destaddr & 0xFF00) == (baseaddr & 0xFF00) else 4
@@ -271,6 +284,21 @@ def branch_semantics(predicate):
             'Cycles':    timing,
         }
     return semantics
+
+def branch_bus_trace(predicate):
+    def _bus_trace(mode_template, tc):
+        baseaddr = 0x0002
+        offset = ((tc['Memory'] ^ 0x80) - 0x80) if predicate(tc) else 0
+        destaddr = (baseaddr + offset) & 0xFFFF
+        if not predicate(tc):
+            return [(0x0000, BusTraceRead), (0x0001, BusTraceRead)]
+        else:
+            if (destaddr & 0xFF00) == (baseaddr & 0xFF00):
+                return [(0x0000, BusTraceRead), (0x0001, BusTraceRead), (0x0002, BusTraceReadDiscard)]
+            else:
+                return [(0x0000, BusTraceRead), (0x0001, BusTraceRead), (0x0002, BusTraceReadDiscard), ((baseaddr & 0xFF00) | (destaddr & 0x00FF), BusTraceReadDiscard)]
+    return _bus_trace
+
 
 instructions: list[Instruction] = [
     Instruction(
@@ -289,7 +317,7 @@ instructions: list[Instruction] = [
         testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'LDY',
@@ -307,7 +335,7 @@ instructions: list[Instruction] = [
         testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'LDA',
@@ -328,7 +356,7 @@ instructions: list[Instruction] = [
         testcases   = {'Memory': [0x42, 0xAA, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'STX',
@@ -341,7 +369,7 @@ instructions: list[Instruction] = [
                         'Memory': tc[Register.X],
                       },
         testcases   = {Register.X: [0x42], 'Memory': [0x00]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceWrite),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceWrite),
     ),
     Instruction(
         mnemonic    = 'STY',
@@ -354,7 +382,7 @@ instructions: list[Instruction] = [
                         'Memory': tc[Register.Y],
                       },
         testcases   = {Register.Y: [0x42], 'Memory': [0x00]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceWrite),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceWrite),
     ),
     Instruction(
         mnemonic    = 'STA',
@@ -371,7 +399,7 @@ instructions: list[Instruction] = [
                         'Memory': tc[Register.A],
                       },
         testcases   = {Register.A: [0x42], 'Memory': [0x00]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceWrite, BusCtrlBits.DelayCycle),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceWrite, BusCtrlBits.DelayCycle),
     ),
     Instruction(
         mnemonic    = 'TAX',
@@ -384,7 +412,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.A: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'TAY',
@@ -397,7 +425,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.A: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'TSX',
@@ -410,7 +438,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.SP: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'TXA',
@@ -423,7 +451,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'TXS',
@@ -436,7 +464,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'TYA',
@@ -449,7 +477,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.Y: [0x00, 0xAA, 0x42], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'PHA',
@@ -461,7 +489,7 @@ instructions: list[Instruction] = [
                         'Stack':     tc[Register.A],
                       },
         testcases   = { Register.A: [0xAA], Register.SP: [0xFD] },
-        bus_trace   = lambda ModeTemplate: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FD, BusTraceWrite)],
+        bus_trace   = lambda ModeTemplate, TestCase: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FD, BusTraceWrite)],
     ),
     Instruction(
         mnemonic    = 'PLA',
@@ -475,7 +503,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = { 'Stack': [0x00, 0xAA, 0x42], Register.SP: [0xFD], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FC, BusTraceReadDiscard), (0x01FD, BusTraceRead)],
+        bus_trace   = lambda ModeTemplate, TestCase: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FC, BusTraceReadDiscard), (0x01FD, BusTraceRead)],
     ),
     Instruction(
         mnemonic    = 'PHP',
@@ -488,7 +516,7 @@ instructions: list[Instruction] = [
                         Register.SP: tc[Register.SP] - 1,
                       },
         testcases   = { Register.P: [0xCF], Register.SP: [0xFD] },
-        bus_trace   = lambda ModeTemplate: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FD, BusTraceWrite)],
+        bus_trace   = lambda ModeTemplate, TestCase: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FD, BusTraceWrite)],
     ),
     Instruction(
         mnemonic    = 'PLP',
@@ -501,7 +529,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = { 'Stack': [0xAA], 'Flags':[0x55], Register.SP: [0xFD] },
         flagmask    = 0xFF & ~0x30, # PLP affects all flags except for bits 4 and 5
-        bus_trace   = lambda ModeTemplate: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FC, BusTraceReadDiscard), (0x01FD, BusTraceRead)],
+        bus_trace   = lambda ModeTemplate, TestCase: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FC, BusTraceReadDiscard), (0x01FD, BusTraceRead)],
     ),
     Instruction(
         mnemonic    = 'DEC',
@@ -517,7 +545,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {'Memory': [0x01, 0xAA, 0x42, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
     ),
     Instruction(
         mnemonic    = 'INC',
@@ -533,7 +561,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {'Memory': [0xFF, 0xAA, 0x42, 0x00], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
     ),
     Instruction(
         mnemonic    = 'DEX',
@@ -546,7 +574,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42, 0xFF], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'DEY',
@@ -559,7 +587,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.Y: [0x00, 0xAA, 0x42, 0xFF], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'INX',
@@ -572,7 +600,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.X: [0x00, 0xAA, 0x42, 0xFF], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'INY',
@@ -585,7 +613,7 @@ instructions: list[Instruction] = [
                       },
         testcases   = {Register.Y: [0x00, 0xAA, 0x42, 0xFF], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'ADC',
@@ -610,7 +638,7 @@ instructions: list[Instruction] = [
         testcases   = {Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0x00, 0x01], 'Flags': [StatusFlags.C, 0x00]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C | StatusFlags.V,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'SBC',
@@ -635,7 +663,7 @@ instructions: list[Instruction] = [
         testcases   = {Register.A: [0x00, 0x42, 0xAA, 0xFF], 'Memory': [0xFF, 0xFE], 'Flags': [StatusFlags.C, 0x00]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C | StatusFlags.V,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'AND',
@@ -656,7 +684,7 @@ instructions: list[Instruction] = [
         testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'EOR',
@@ -677,7 +705,7 @@ instructions: list[Instruction] = [
         testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'ORA',
@@ -698,7 +726,7 @@ instructions: list[Instruction] = [
         testcases   = {Register.A: [0x00, 0xFF, 0x10], 'Memory': [0x00, 0xFF, 0x01], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N]},
         flagmask    = StatusFlags.N | StatusFlags.Z,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'ASLA', # ASL/accumulator
@@ -711,7 +739,7 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {Register.A: [0x80, 0xAA, 0x55]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'ASLM', # ASL/memory
@@ -727,7 +755,7 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {'Memory': [0x80, 0xAA, 0x55], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N | StatusFlags.C]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
     ),
     Instruction(
         mnemonic    = 'LSRA', # LSR/accumulator
@@ -740,7 +768,7 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {Register.A: [0x80, 0x01, 0x55], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N | StatusFlags.C]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'LSRM', # LSR/memory
@@ -756,7 +784,7 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [0x00, StatusFlags.Z | StatusFlags.N | StatusFlags.C]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
     ),
     Instruction(
         mnemonic    = 'ROLA', # ROL/accumulator
@@ -769,7 +797,7 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {Register.A: [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'ROLM', # ROL/memory
@@ -785,7 +813,7 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
     ),
     Instruction(
         mnemonic    = 'RORA', # ROR/accumulator
@@ -798,7 +826,7 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {Register.A: [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'RORM', # LSR/memory
@@ -814,7 +842,7 @@ instructions: list[Instruction] = [
                       ),
         testcases   = {'Memory': [0x80, 0x01, 0x55], 'Flags': [StatusFlags.C, 0x00]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead, BusCtrlBits.DelayCycle) + [(ModeTemplate.eaddr, BusTraceWrite), (ModeTemplate.eaddr, BusTraceWrite)],
     ),
     Instruction(
         mnemonic    = 'CLC',
@@ -822,7 +850,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: ({'Flags': 0}),
         flagmask    = StatusFlags.C,
         testcases   = {'Flags': [StatusFlags.C, 0]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'CLI',
@@ -830,7 +858,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: ({'Flags': 0}),
         flagmask    = StatusFlags.I,
         testcases   = {'Flags': [StatusFlags.I, 0]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'CLV',
@@ -838,7 +866,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: ({'Flags': 0}),
         flagmask    = StatusFlags.V,
         testcases   = {'Flags': [StatusFlags.V, 0]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'SEC',
@@ -846,7 +874,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: ({'Flags': StatusFlags.C}),
         flagmask    = StatusFlags.C,
         testcases   = {'Flags': [StatusFlags.C, 0]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'SEI',
@@ -854,7 +882,7 @@ instructions: list[Instruction] = [
         semantics   = lambda tc: ({'Flags': StatusFlags.I}),
         flagmask    = StatusFlags.I,
         testcases   = {'Flags': [StatusFlags.I, 0]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(),
     ),
     Instruction(
         mnemonic    = 'BIT',
@@ -867,7 +895,7 @@ instructions: list[Instruction] = [
                       }),
         flagmask    = StatusFlags.N | StatusFlags.V | StatusFlags.Z,
         testcases   = {Register.A:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'CMP',
@@ -889,7 +917,7 @@ instructions: list[Instruction] = [
         testcases   = {Register.A:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'CPX',
@@ -906,7 +934,7 @@ instructions: list[Instruction] = [
         testcases   = {Register.X:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'CPY',
@@ -923,7 +951,7 @@ instructions: list[Instruction] = [
         testcases   = {Register.Y:[0xAA, 0x55], 'Memory':[0x55, 0xAA], 'Flags':[0x00, StatusFlags.N | StatusFlags.V | StatusFlags.Z]},
         flagmask    = StatusFlags.N | StatusFlags.Z | StatusFlags.C,
         xpagestall  = True,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'JMP',
@@ -936,71 +964,7 @@ instructions: list[Instruction] = [
                       }),
         testcases   = {'Memory':[0x2001]},
         templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
-    ),
-    Instruction(
-        mnemonic    = 'BCC',
-        modes       = {AddressModeId.Relative: (0x90, 2)},
-        semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.C)),
-        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.C]},
-        templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
-    ),
-    Instruction(
-        mnemonic    = 'BCS',
-        modes       = {AddressModeId.Relative: (0xB0, 2)},
-        semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.C)),
-        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.C]},
-        templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
-    ),
-    Instruction(
-        mnemonic    = 'BNE',
-        modes       = {AddressModeId.Relative: (0xD0, 2)},
-        semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.Z)),
-        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.Z]},
-        templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
-    ),
-    Instruction(
-        mnemonic    = 'BEQ',
-        modes       = {AddressModeId.Relative: (0xF0, 2)},
-        semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.Z)),
-        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.Z]},
-        templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
-    ),
-    Instruction(
-        mnemonic    = 'BPL',
-        modes       = {AddressModeId.Relative: (0x10, 2)},
-        semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.N)),
-        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.N]},
-        templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
-    ),
-    Instruction(
-        mnemonic    = 'BMI',
-        modes       = {AddressModeId.Relative: (0x30, 2)},
-        semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.N)),
-        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.N]},
-        templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
-    ),
-    Instruction(
-        mnemonic    = 'BVC',
-        modes       = {AddressModeId.Relative: (0x50, 2)},
-        semantics   = branch_semantics(lambda tc: not (tc['Flags'] & StatusFlags.V)),
-        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.V]},
-        templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
-    ),
-    Instruction(
-        mnemonic    = 'BVS',
-        modes       = {AddressModeId.Relative: (0x70, 2)},
-        semantics   = branch_semantics(lambda tc: (tc['Flags'] & StatusFlags.V)),
-        testcases   = {'Memory':[0x08, 0x88], 'Flags':[0x00, StatusFlags.V]},
-        templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: ModeTemplate.trace(BusTraceRead),
+        bus_trace   = lambda ModeTemplate, TestCase: ModeTemplate.trace(BusTraceRead),
     ),
     Instruction(
         mnemonic    = 'JSR',
@@ -1012,10 +976,11 @@ instructions: list[Instruction] = [
                         Register.SP: (tc[Register.SP] - 2) & 0xFF,
                         'Stack':     [0x02, 0x00],
                       },
-        testcases   = { 'Memory': [0x1001], Register.SP: [0xFD] },
+        testcases   = { 'Memory': [0x1001], Register.SP: [0xFD, 0x00] },
         templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: [(0x0000, BusTraceRead), (0x0001, BusTraceRead), (0x01FD, BusTraceReadDiscard),
-                                            (0x01FD, BusTraceWrite), (0x01FC, BusTraceWrite), (0x0002, BusTraceRead)],
+        bus_trace   = lambda ModeTemplate, TestCase:
+                        [(0x0000, BusTraceRead), (0x0001, BusTraceRead), (0x0100 | TestCase[Register.SP], BusTraceReadDiscard),
+                         (0x0100 | TestCase[Register.SP], BusTraceWrite), (0x0100 | dec_u8(TestCase[Register.SP]), BusTraceWrite), (0x0002, BusTraceRead)],
     ),
     Instruction(
         mnemonic    = 'RTS',
@@ -1026,10 +991,59 @@ instructions: list[Instruction] = [
                         Register.PC: tc['Memory'] + 1, # RTS corrects for PC pushed by JSR
                         Register.SP: tc[Register.SP],
                       },
-        testcases   = { 'Stack': [[0x10, 0x01]], 'Memory': [0x1001], Register.SP: [0xFD] },
+        testcases   = { 'Stack': [[0x10, 0x01]], 'Memory': [0x1001], Register.SP: [0xFD, 0xFF] },
         templates   = jump_templates,
-        bus_trace   = lambda ModeTemplate: [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x01FB, BusTraceReadDiscard),
-                                            (0x01FC, BusTraceRead), (0x01FD, BusTraceRead), (0x1001, BusTraceReadDiscard)],
+        bus_trace   = lambda ModeTemplate, TestCase:
+                        [(0x0000, BusTraceRead), (0x0001, BusTraceReadDiscard), (0x0100 | sub_u8(TestCase[Register.SP], 2), BusTraceReadDiscard),
+                         (0x0100 | sub_u8(TestCase[Register.SP], 1), BusTraceRead), (0x0100 | TestCase[Register.SP], BusTraceRead), (0x1001, BusTraceReadDiscard)],
+    ),
+    BranchInstruction(
+        mnemonic    = 'BCC',
+        opcode      = 0x90,
+        condition   = lambda tc: not (tc['Flags'] & StatusFlags.C),
+        flags_test  = [0x00, StatusFlags.C]
+    ),
+    BranchInstruction(
+        mnemonic    = 'BCS',
+        opcode      = 0xB0,
+        condition   = lambda tc: (tc['Flags'] & StatusFlags.C),
+        flags_test  = [0x00, StatusFlags.C]
+    ),
+    BranchInstruction(
+        mnemonic    = 'BNE',
+        opcode      = 0xD0,
+        condition   = lambda tc: not (tc['Flags'] & StatusFlags.Z),
+        flags_test  = [0x00, StatusFlags.Z]
+    ),
+    BranchInstruction(
+        mnemonic    = 'BEQ',
+        opcode      = 0xF0,
+        condition   = lambda tc: (tc['Flags'] & StatusFlags.Z),
+        flags_test  = [0x00, StatusFlags.Z]
+    ),
+    BranchInstruction(
+        mnemonic    = 'BPL',
+        opcode      = 0x10,
+        condition   = lambda tc: not (tc['Flags'] & StatusFlags.N),
+        flags_test  = [0x00, StatusFlags.N]
+    ),
+    BranchInstruction(
+        mnemonic    = 'BMI',
+        opcode      = 0x30,
+        condition   = lambda tc: (tc['Flags'] & StatusFlags.N),
+        flags_test  = [0x00, StatusFlags.N]
+    ),
+    BranchInstruction(
+        mnemonic    = 'BVC',
+        opcode      = 0x50,
+        condition   = lambda tc: not (tc['Flags'] & StatusFlags.V),
+        flags_test  = [0x00, StatusFlags.V]
+    ),
+    BranchInstruction(
+        mnemonic    = 'BVS',
+        opcode      = 0x70,
+        condition   = lambda tc: (tc['Flags'] & StatusFlags.V),
+        flags_test  = [0x00, StatusFlags.V]
     ),
 ]
 
@@ -1117,7 +1131,7 @@ def gen_instruction_tests(instr: Instruction) -> None:
                 # Validate the bus trace if any
                 if callable(instr.bus_trace):
                     print("    struct mos6502_bus_trace trace[] = {")
-                    bus_trace = instr.bus_trace(mode_template)
+                    bus_trace = instr.bus_trace(mode_template, testcase)
                     for cycle, trace in enumerate(bus_trace):
                         print(f"        {{.cycle = {cycle + 7}, .addr = 0x{trace[0]:04x}, .flags.as_u8 = {trace[1]}}},")
                     print("    };")

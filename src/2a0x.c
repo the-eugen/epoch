@@ -1153,16 +1153,18 @@ static void uop_exec(struct mos6502_cpu* cpu)
             } \
             break; \
         case 2: \
+            /* Discarded external fetch from PC + 2 */ \
+            cpu_fetch_discard(cpu, cpu->PC); \
             /* Branch taken: insert cross-page delay if needed */ \
-            /* TODO: there is an external fetch from PC+2 here that is discarded */ \
             if (((cpu->PC + (int8_t)cpu->db) & 0xFF00) != cpu->PCH) { \
                 cpu->instr.ncycles++; \
             } \
             cpu->PCL += (int8_t)cpu->db; \
             break; \
         case 3: \
+            /* Discarded external fetch from PCH:(PCL+Offset) */ \
+            cpu_fetch_discard(cpu, cpu->PC); \
             /* Branch taken: xpage delay cycle */ \
-            /* TODO: there is an external fetch from old PCH/new PCL here that is discarded */ \
             cpu->PCH += (cpu->db & 0x80 ? -1 : +1); \
             break; \
         default: \
