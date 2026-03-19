@@ -1061,8 +1061,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         cpu->P &= ~SR_C;
         break;
     case MOS_UOP_CLD:
-        /* BCD is not supported */
-        ep_verify(false);
+        cpu->P &= ~SR_D;
         break;
     case MOS_UOP_CLI:
         cpu->P &= ~SR_I;
