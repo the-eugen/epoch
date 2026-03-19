@@ -9,9 +9,7 @@
 #include <assert.h>
 
 #include "defs.h"
-
-typedef uint8_t     mos_word_t;
-typedef uint16_t    mos_pa_t;
+#include "2a0x.h"
 
 enum mos6502_uop
 {
@@ -97,6 +95,8 @@ enum mos6502_tstate
 
 struct mos6502_instr
 {
+    const char* mnemonic;
+
     /* Op we're executing */
     uint8_t uop;
 
@@ -118,29 +118,6 @@ struct mos6502_instr
     #define MOS_CTRL_XPAGE_DELAY (1u << 2)
     /* Control logic bits */
     uint8_t ctrlbits;
-};
-
-ep_static_assert(sizeof(struct mos6502_instr) <= sizeof(uint64_t));
-
-struct mos6502_cpu;
-struct mos6502_pa_range;
-
-typedef void(*mos6502_mmio_handler)(struct mos6502_cpu* cpu,
-                                    const struct mos6502_pa_range* range,
-                                    bool rw,
-                                    mos_pa_t offset,
-                                    mos_word_t* pdata);
-
-struct mos6502_pa_range
-{
-    mos_pa_t base;
-    uint32_t size;
-    bool is_ram;
-
-    union {
-        mos_word_t* mapped;
-        mos6502_mmio_handler handler;
-    };
 };
 
 struct mos6502_bus_trace
@@ -208,9 +185,6 @@ struct mos6502_cpu
     uint64_t cycle;
     uint64_t total_retired;
 
-    size_t nregions;
-    struct mos6502_pa_range pa_map[8];
-
 #ifdef EP_CONFIG_TEST
     /* Bus trace records last instruction externally-visible effects */
     #define EP_TEST_BUS_TRACE_SIZE 16
@@ -221,6 +195,7 @@ struct mos6502_cpu
 
 #define _MOS_OP_CTRLBITS(_opc_, _mnemonic_, _mode_, _ncycles_, _ctrlbits_) \
     [(_opc_)] = (struct mos6502_instr) { \
+        .mnemonic = #_mnemonic_, \
         .uop = MOS_UOP_ ##_mnemonic_, \
         .mode = (_mode_), \
         .ncycles = (_ncycles_), \
@@ -472,45 +447,22 @@ static inline void record_bus_trace(struct mos6502_cpu* cpu, mos_pa_t addr, bool
 
 #endif
 
-static const struct mos6502_pa_range* map_addr(struct mos6502_cpu* cpu, mos_pa_t pa)
-{
-    /* TODO: this can be a binary search, but the amount of regions is small enough for now */
-    for (size_t i = 0; i < cpu->nregions; i++) {
-        struct mos6502_pa_range* r = &cpu->pa_map[i];
-        if (r->base <= pa && pa <= r->base + (r->size - 1)) {
-            return r;
-        }
-    }
-
-    /* TODO: Handle unmapped addresses */
-    ep_verify(false);
-}
-
 static mos_word_t fetch_word(struct mos6502_cpu* cpu, mos_pa_t pa)
 {
-    const struct mos6502_pa_range* r = map_addr(cpu, pa);
-    ep_verify(r);
+    /* TODO: Handle unmapped addresses */
+    mos_word_t* vaddr = mos6502_decode_paddr(cpu, pa);
+    ep_verify(vaddr);
 
-    mos_word_t val;
-    if (r->is_ram) {
-        val = r->mapped[pa - r->base];
-    } else {
-        r->handler(cpu, r, false, pa - r->base, &val);
-    }
-
-    return val;
+    return *vaddr;
 }
 
 static void store_word(struct mos6502_cpu* cpu, mos_pa_t pa, mos_word_t val)
 {
-    const struct mos6502_pa_range* r = map_addr(cpu, pa);
-    ep_verify(r);
+    /* TODO: Handle unmapped addresses */
+    mos_word_t* vaddr = mos6502_decode_paddr(cpu, pa);
+    ep_verify(vaddr);
 
-    if (r->is_ram) {
-        r->mapped[pa - r->base] = val;
-    } else {
-        r->handler(cpu, r, true, pa - r->base, &val);
-    }
+    *vaddr = val;
 }
 
 static void push_word(struct mos6502_cpu* cpu, mos_word_t val)
@@ -564,7 +516,9 @@ static inline void cpu_push(struct mos6502_cpu* cpu, mos_word_t val)
 static void fetch_next_instr(struct mos6502_cpu* cpu)
 {
     /* TODO: unimplemented instruction exception? */
-    cpu->instr = mos_opcodes[cpu_fetch(cpu, cpu->PC++)];
+    mos_word_t opcode = cpu_fetch(cpu, cpu->PC++);
+    cpu->instr = mos_opcodes[opcode];
+    ep_trace("[%04lu] PC:%04hx fetch %02hhx %s", cpu->cycle, (mos_pa_t)(cpu->PC - 1), opcode, cpu->instr.mnemonic);
 }
 
 static inline void latch_address(struct mos6502_cpu* cpu, mos_pa_t addr)
@@ -637,7 +591,7 @@ static inline bool should_stall(struct mos6502_cpu *cpu, mos_pa_t base, uint8_t 
 
     return false;
 }
-            
+
 static void addr_mode_exec(struct mos6502_cpu* cpu)
 {
     ep_assert(cpu->tstate == MOS_TSTATE_ADDRESS_LATCH);
@@ -1255,25 +1209,9 @@ static void uop_exec(struct mos6502_cpu* cpu)
     };
 }
 
-static void insert_pa_range(struct mos6502_cpu* cpu, struct mos6502_pa_range* range)
+struct mos6502_cpu* mos6502_create(void)
 {
-    ep_verify(cpu->nregions < sizeof(cpu->pa_map) / sizeof(cpu->pa_map[0]));
-
-    /* Find a place to insert the region into */
-    for (size_t i = 0; i < cpu->nregions; i++) {
-        if (cpu->pa_map[i].base > range->base) {
-            ep_verify(range->base + (range->size - 1) < cpu->pa_map[i].base);
-            memmove(&cpu->pa_map[i + 1], &cpu->pa_map[i], sizeof(*range) * (cpu->nregions - i));
-            cpu->pa_map[i] = *range;
-            cpu->nregions++;
-            return;
-        }
-
-        ep_verify(cpu->pa_map[i].base + (cpu->pa_map[i].size - 1) < range->base);
-    }
-
-    /* No place found, insert at the end */
-    cpu->pa_map[cpu->nregions++] = *range;
+    return ep_alloc(sizeof(struct mos6502_cpu));
 }
 
 void mos6502_init(struct mos6502_cpu* cpu)
@@ -1299,23 +1237,6 @@ void mos6502_reset(struct mos6502_cpu* cpu)
     cpu->tstate = MOS_TSTATE_FETCH;
 
     reset_bus_trace(cpu);
-}
-
-void mos6502_map_ram_region(struct mos6502_cpu* cpu, mos_pa_t base, size_t size, void* mapped)
-{
-    ep_verify(cpu != NULL);
-    ep_verify(mapped != NULL);
-    ep_verify(size != 0);
-    ep_verify((~base & 0xFFFF) <= size - 1);
-
-    struct mos6502_pa_range range = {
-        .base = base,
-        .size = size,
-        .is_ram = true,
-        .mapped = mapped,
-    };
-
-    insert_pa_range(cpu, &range);
 }
 
 mos_word_t mos6502_load_word(struct mos6502_cpu* cpu, mos_pa_t addr)
@@ -1406,6 +1327,12 @@ uint64_t mos6502_total_retired(struct mos6502_cpu* cpu)
     return cpu->total_retired;
 }
 
+uint64_t mos6502_cycles(struct mos6502_cpu* cpu)
+{
+    ep_verify(cpu != NULL);
+    return cpu->cycle;
+}
+
 /*
  * Tests.
  */
@@ -1421,38 +1348,27 @@ uint64_t mos6502_total_retired(struct mos6502_cpu* cpu)
 
 #define EP_TEST_RAM_SIZE 0x10000
 
-static void* alloc_ram_region(void)
-{
-    mos_word_t* ram = (mos_word_t*)mmap(NULL, EP_TEST_RAM_SIZE, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-    ep_verify(ram != MAP_FAILED);
-    memset(ram, 0, EP_TEST_RAM_SIZE);
+static mos_word_t test_ram[EP_TEST_RAM_SIZE];
+ep_static_assert((mos_pa_t)-1 < EP_TEST_RAM_SIZE);
 
-    return ram;
-}
-
-static void free_ram_region(void* ram)
+extern mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_pa_t paddr)
 {
-    if (ram) {
-        munmap(ram, EP_TEST_RAM_SIZE);
-    }
+    (void)cpu;
+
+    return &test_ram[paddr];
 }
 
 static void init_test_cpu(struct mos6502_cpu* cpu)
 {
-    mos_word_t* ram = alloc_ram_region();
-    ram[0xFFFC] = 0x00;
-    ram[0xFFFD] = 0x00;
-
+    memset(test_ram, 0, sizeof(test_ram));
     mos6502_init(cpu);
-    mos6502_map_ram_region(cpu, 0, 0x10000, ram);
     mos6502_reset(cpu);
 }
 
-static void store_words(struct mos6502_cpu* cpu, uint16_t base, const mos_word_t* data, size_t nbytes)
+static void store_words(struct mos6502_cpu* cpu, uint16_t base, const mos_word_t* data, uint16_t nbytes)
 {
-    const struct mos6502_pa_range* ram = map_addr(cpu, base);
-    ep_assert(ram && ram->is_ram);
-    memcpy(ram->mapped + base, data, nbytes);
+    ep_assert((size_t)base + nbytes < EP_TEST_RAM_SIZE);
+    memcpy(test_ram + base, data, nbytes);
 }
 
 static uint64_t run_test_cpu(struct mos6502_cpu* cpu)
@@ -1489,13 +1405,7 @@ ep_test(test_reset)
 {
     struct mos6502_cpu cpu;
 
-    mos_word_t* ram = alloc_ram_region();
-    ram[0xFFFC] = 0x00;
-    ram[0xFFFD] = 0x00;
-
-    mos6502_init(&cpu);
-    mos6502_map_ram_region(&cpu, 0, 0x10000, ram);
-    mos6502_reset(&cpu);
+    init_test_cpu(&cpu);
 
     ep_verify_equal(cpu.cycle, 7);
     ep_verify_equal(cpu.PC, 0x0000);
@@ -1504,8 +1414,6 @@ ep_test(test_reset)
     ep_verify(!(cpu.P & SR_D));
     ep_verify(cpu.P & SR_I);
     ep_verify(!cpu.halted);
-
-    free_ram_region(ram);
 }
 
 static void run_hlt_testcase(mos_word_t opcode)

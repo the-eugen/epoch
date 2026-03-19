@@ -13,7 +13,7 @@
 ep_noreturn void _ep_abort(const char* cond, const char* file, unsigned int line, const char* func);
 
 #define ep_static_assert(_cond_) _Static_assert(_cond_, #_cond_)
-#define ep_verify(_cond_) ((_cond_) ? (void)0 : _ep_abort(#_cond_, __FILE__, __LINE__, __func__))
+#define ep_verify(_cond_) (ep_likely(_cond_) ? (void)0 : _ep_abort(#_cond_, __FILE__, __LINE__, __func__))
 
 #ifdef EP_DEBUG
 #include <stdio.h>
@@ -23,3 +23,18 @@ ep_noreturn void _ep_abort(const char* cond, const char* file, unsigned int line
 #define ep_assert(_cond_)
 #define ep_trace(...)
 #endif
+
+static inline void* ep_alloc(size_t size)
+{
+    return malloc(size);
+}
+
+static inline void ep_free(void* p)
+{
+    free(p);
+}
+
+static inline void* ep_zalloc(size_t size)
+{
+    return calloc(size, 1);
+}
