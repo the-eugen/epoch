@@ -56,3 +56,8 @@ dkms.conf
 
 obj/
 src/*.inc
+
+# ROM and Binary images
+*.rom
+*.bin
+
