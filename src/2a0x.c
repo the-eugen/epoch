@@ -11,81 +11,6 @@
 #include "defs.h"
 #include "2a0x.h"
 
-enum mos6502_uop
-{
-    MOS_UOP_NOP,
-    MOS_UOP_HLT,
-    MOS_UOP_LDA,
-    MOS_UOP_LDX,
-    MOS_UOP_LDY,
-    MOS_UOP_STA,
-    MOS_UOP_STX,
-    MOS_UOP_STY,
-    MOS_UOP_TAX,
-    MOS_UOP_TAY,
-    MOS_UOP_TSX,
-    MOS_UOP_TXA,
-    MOS_UOP_TXS,
-    MOS_UOP_TYA,
-    MOS_UOP_PHA,
-    MOS_UOP_PLA,
-    MOS_UOP_PHP,
-    MOS_UOP_PLP,
-    MOS_UOP_DEC,
-    MOS_UOP_DEX,
-    MOS_UOP_DEY,
-    MOS_UOP_INC,
-    MOS_UOP_INX,
-    MOS_UOP_INY,
-    MOS_UOP_ADC,
-    MOS_UOP_SBC,
-    MOS_UOP_AND,
-    MOS_UOP_EOR,
-    MOS_UOP_ORA,
-    MOS_UOP_ASL,
-    MOS_UOP_LSR,
-    MOS_UOP_ROL,
-    MOS_UOP_ROR,
-    MOS_UOP_CLC,
-    MOS_UOP_CLD,
-    MOS_UOP_CLI,
-    MOS_UOP_CLV,
-    MOS_UOP_SEC,
-    MOS_UOP_SED,
-    MOS_UOP_SEI,
-    MOS_UOP_BIT,
-    MOS_UOP_CMP,
-    MOS_UOP_CPX,
-    MOS_UOP_CPY,
-    MOS_UOP_JMP,
-    MOS_UOP_JSR,
-    MOS_UOP_RTS,
-    MOS_UOP_BCC,
-    MOS_UOP_BCS,
-    MOS_UOP_BEQ,
-    MOS_UOP_BMI,
-    MOS_UOP_BNE,
-    MOS_UOP_BPL,
-    MOS_UOP_BVC,
-    MOS_UOP_BVS,
-};
-
-enum mos6502_addr_mode
-{
-    MOS_AM_IMP,
-    MOS_AM_IMM,
-    MOS_AM_Z,
-    MOS_AM_ZX,
-    MOS_AM_ZY,
-    MOS_AM_ABS,
-    MOS_AM_ABSX,
-    MOS_AM_ABSY,
-    MOS_AM_IND,
-    MOS_AM_INDX,
-    MOS_AM_INDY,
-    MOS_AM_REL,
-};
-
 enum mos6502_tstate
 {
     MOS_TSTATE_FETCH,
@@ -93,32 +18,6 @@ enum mos6502_tstate
     MOS_TSTATE_UOP,
 };
 
-struct mos6502_instr
-{
-    const char* mnemonic;
-
-    /* Op we're executing */
-    uint8_t uop;
-
-    /* Address mode */
-    uint8_t mode;
-
-    /* Current instruction cycle, 0-based. */
-    uint8_t cycle;
-
-    /* Total cycles this instruction takes to execute.
-       Note that this is a default and might be adjusted when we run the uop. */
-    uint8_t ncycles;
-
-    /* Latch address to PC register instead of an internal address latch */
-    #define MOS_CTRL_PC_ADDRESS_LATCH (1u << 0)
-    /* This is a write instruction and will take an extra cycle */
-    #define MOS_CTRL_RW (1u << 1)
-    /* Insert a cross page delay cycle signal */
-    #define MOS_CTRL_XPAGE_DELAY (1u << 2)
-    /* Control logic bits */
-    uint8_t ctrlbits;
-};
 
 struct mos6502_bus_trace
 {
@@ -182,6 +81,8 @@ struct mos6502_cpu
     enum mos6502_tstate tstate;
 
     struct mos6502_instr instr;
+    uint8_t instr_cycle;
+
     uint64_t cycle;
     uint64_t total_retired;
 
@@ -193,217 +94,215 @@ struct mos6502_cpu
 #endif
 };
 
-#define _MOS_OP_CTRLBITS(_opc_, _mnemonic_, _mode_, _ncycles_, _ctrlbits_) \
+#define _MOS_OP_CTRLBITS(_opc_, _mnemonic_, _mode_, _ncycles_, _length_, _ctrlbits_) \
     [(_opc_)] = (struct mos6502_instr) { \
         .mnemonic = #_mnemonic_, \
         .uop = MOS_UOP_ ##_mnemonic_, \
         .mode = (_mode_), \
         .ncycles = (_ncycles_), \
+        .length = (_length_), \
         .ctrlbits = (_ctrlbits_), \
     }
 
-#define _MOS_OP(_opc_, _mnemonic_, _mode_, _ncycles_) \
-    _MOS_OP_CTRLBITS(_opc_, _mnemonic_, _mode_, _ncycles_, 0)
+#define _MOS_OP(_opc_, _mnemonic_, _mode_, _ncycles_, _length_) \
+    _MOS_OP_CTRLBITS(_opc_, _mnemonic_, _mode_, _ncycles_, _length_, 0)
 
-#define _MOS_APPLY_N(_1, _2, _3, _4, _5, _apply, ...) \
+#define _MOS_APPLY_N(_1, _2, _3, _4, _5, _6, _apply, ...) \
     _apply
-
-#define _MOS_APPLY(...) \
-    _X(_MOS_APPLY_N(__VA_ARGS__, _MOS_OP_CTRLBITS, _MOS_OP)(__VA_ARGS__))
 
 #define MOS_OP(...) \
     _X(_MOS_APPLY_N(__VA_ARGS__, _MOS_OP_CTRLBITS, _MOS_OP)(__VA_ARGS__))
 
 static const struct mos6502_instr mos_opcodes[] =
 {
-    MOS_OP(0xea, NOP, MOS_AM_IMP,  2),
+    MOS_OP(0xea, NOP, MOS_AM_IMP,  2, 1),
 
-    MOS_OP(0x02, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0x12, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0x22, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0x32, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0x42, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0x52, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0x62, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0x72, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0x92, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0xb2, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0xd2, HLT, MOS_AM_IMP,  1),
-    MOS_OP(0xf2, HLT, MOS_AM_IMP,  1),
+    MOS_OP(0x02, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0x12, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0x22, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0x32, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0x42, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0x52, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0x62, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0x72, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0x92, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0xb2, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0xd2, HLT, MOS_AM_IMP,  1, 1),
+    MOS_OP(0xf2, HLT, MOS_AM_IMP,  1, 1),
 
-    MOS_OP(0xa9, LDA, MOS_AM_IMM,  2),
-    MOS_OP(0xa5, LDA, MOS_AM_Z,    3),
-    MOS_OP(0xb5, LDA, MOS_AM_ZX,   4),
-    MOS_OP(0xad, LDA, MOS_AM_ABS,  4),
-    MOS_OP(0xbd, LDA, MOS_AM_ABSX, 4),
-    MOS_OP(0xb9, LDA, MOS_AM_ABSY, 4),
-    MOS_OP(0xa1, LDA, MOS_AM_INDX, 6),
-    MOS_OP(0xb1, LDA, MOS_AM_INDY, 5),
+    MOS_OP(0xa9, LDA, MOS_AM_IMM,  2, 2),
+    MOS_OP(0xa5, LDA, MOS_AM_Z,    3, 2),
+    MOS_OP(0xb5, LDA, MOS_AM_ZX,   4, 2),
+    MOS_OP(0xad, LDA, MOS_AM_ABS,  4, 3),
+    MOS_OP(0xbd, LDA, MOS_AM_ABSX, 4, 3),
+    MOS_OP(0xb9, LDA, MOS_AM_ABSY, 4, 3),
+    MOS_OP(0xa1, LDA, MOS_AM_INDX, 6, 2),
+    MOS_OP(0xb1, LDA, MOS_AM_INDY, 5, 2),
 
-    MOS_OP(0xa2, LDX, MOS_AM_IMM,  2),
-    MOS_OP(0xa6, LDX, MOS_AM_Z,    3),
-    MOS_OP(0xb6, LDX, MOS_AM_ZY,   4),
-    MOS_OP(0xae, LDX, MOS_AM_ABS,  4),
-    MOS_OP(0xbe, LDX, MOS_AM_ABSY, 4),
+    MOS_OP(0xa2, LDX, MOS_AM_IMM,  2, 2),
+    MOS_OP(0xa6, LDX, MOS_AM_Z,    3, 2),
+    MOS_OP(0xb6, LDX, MOS_AM_ZY,   4, 2),
+    MOS_OP(0xae, LDX, MOS_AM_ABS,  4, 3),
+    MOS_OP(0xbe, LDX, MOS_AM_ABSY, 4, 3),
 
-    MOS_OP(0xa0, LDY, MOS_AM_IMM,  2),
-    MOS_OP(0xa4, LDY, MOS_AM_Z,    3),
-    MOS_OP(0xb4, LDY, MOS_AM_ZX,   4),
-    MOS_OP(0xac, LDY, MOS_AM_ABS,  4),
-    MOS_OP(0xbc, LDY, MOS_AM_ABSX, 4),
+    MOS_OP(0xa0, LDY, MOS_AM_IMM,  2, 2),
+    MOS_OP(0xa4, LDY, MOS_AM_Z,    3, 2),
+    MOS_OP(0xb4, LDY, MOS_AM_ZX,   4, 2),
+    MOS_OP(0xac, LDY, MOS_AM_ABS,  4, 3),
+    MOS_OP(0xbc, LDY, MOS_AM_ABSX, 4, 3),
 
-    MOS_OP(0x85, STA, MOS_AM_Z,    3),
-    MOS_OP(0x95, STA, MOS_AM_ZX,   4),
-    MOS_OP(0x8D, STA, MOS_AM_ABS,  4),
-    MOS_OP(0x9D, STA, MOS_AM_ABSX, 5, MOS_CTRL_RW),
-    MOS_OP(0x99, STA, MOS_AM_ABSY, 5, MOS_CTRL_RW),
-    MOS_OP(0x81, STA, MOS_AM_INDX, 6),
-    MOS_OP(0x91, STA, MOS_AM_INDY, 6, MOS_CTRL_RW),
+    MOS_OP(0x85, STA, MOS_AM_Z,    3, 2),
+    MOS_OP(0x95, STA, MOS_AM_ZX,   4, 2),
+    MOS_OP(0x8D, STA, MOS_AM_ABS,  4, 3),
+    MOS_OP(0x9D, STA, MOS_AM_ABSX, 5, 3, MOS_CTRL_RW),
+    MOS_OP(0x99, STA, MOS_AM_ABSY, 5, 3, MOS_CTRL_RW),
+    MOS_OP(0x81, STA, MOS_AM_INDX, 6, 2),
+    MOS_OP(0x91, STA, MOS_AM_INDY, 6, 2, MOS_CTRL_RW),
 
-    MOS_OP(0x86, STX, MOS_AM_Z,    3),
-    MOS_OP(0x96, STX, MOS_AM_ZY,   4),
-    MOS_OP(0x8E, STX, MOS_AM_ABS,  4),
+    MOS_OP(0x86, STX, MOS_AM_Z,    3, 2),
+    MOS_OP(0x96, STX, MOS_AM_ZY,   4, 2),
+    MOS_OP(0x8E, STX, MOS_AM_ABS,  4, 3),
 
-    MOS_OP(0x84, STY, MOS_AM_Z,    3),
-    MOS_OP(0x94, STY, MOS_AM_ZX,   4),
-    MOS_OP(0x8C, STY, MOS_AM_ABS,  4),
+    MOS_OP(0x84, STY, MOS_AM_Z,    3, 2),
+    MOS_OP(0x94, STY, MOS_AM_ZX,   4, 2),
+    MOS_OP(0x8C, STY, MOS_AM_ABS,  4, 3),
 
-    MOS_OP(0xAA, TAX, MOS_AM_IMP,  2),
-    MOS_OP(0xA8, TAY, MOS_AM_IMP,  2),
-    MOS_OP(0xBA, TSX, MOS_AM_IMP,  2),
-    MOS_OP(0x8A, TXA, MOS_AM_IMP,  2),
-    MOS_OP(0x9A, TXS, MOS_AM_IMP,  2),
-    MOS_OP(0x98, TYA, MOS_AM_IMP,  2),
+    MOS_OP(0xAA, TAX, MOS_AM_IMP,  2, 1),
+    MOS_OP(0xA8, TAY, MOS_AM_IMP,  2, 1),
+    MOS_OP(0xBA, TSX, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x8A, TXA, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x9A, TXS, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x98, TYA, MOS_AM_IMP,  2, 1),
 
-    MOS_OP(0x48, PHA, MOS_AM_IMP,  3),
-    MOS_OP(0x68, PLA, MOS_AM_IMP,  4),
-    MOS_OP(0x08, PHP, MOS_AM_IMP,  3),
-    MOS_OP(0x28, PLP, MOS_AM_IMP,  4),
+    MOS_OP(0x48, PHA, MOS_AM_IMP,  3, 1),
+    MOS_OP(0x68, PLA, MOS_AM_IMP,  4, 1),
+    MOS_OP(0x08, PHP, MOS_AM_IMP,  3, 1),
+    MOS_OP(0x28, PLP, MOS_AM_IMP,  4, 1),
 
-    MOS_OP(0xC6, DEC, MOS_AM_Z,    5),
-    MOS_OP(0xD6, DEC, MOS_AM_ZX,   6),
-    MOS_OP(0xCE, DEC, MOS_AM_ABS,  6),
-    MOS_OP(0xDE, DEC, MOS_AM_ABSX, 7, MOS_CTRL_RW),
-    MOS_OP(0xCA, DEX, MOS_AM_IMP,  2),
-    MOS_OP(0x88, DEY, MOS_AM_IMP,  2),
+    MOS_OP(0xC6, DEC, MOS_AM_Z,    5, 2),
+    MOS_OP(0xD6, DEC, MOS_AM_ZX,   6, 2),
+    MOS_OP(0xCE, DEC, MOS_AM_ABS,  6, 3),
+    MOS_OP(0xDE, DEC, MOS_AM_ABSX, 7, 3, MOS_CTRL_RW),
+    MOS_OP(0xCA, DEX, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x88, DEY, MOS_AM_IMP,  2, 1),
 
-    MOS_OP(0xE6, INC, MOS_AM_Z,    5),
-    MOS_OP(0xF6, INC, MOS_AM_ZX,   6),
-    MOS_OP(0xEE, INC, MOS_AM_ABS,  6),
-    MOS_OP(0xFE, INC, MOS_AM_ABSX, 7, MOS_CTRL_RW),
-    MOS_OP(0xE8, INX, MOS_AM_IMP,  2),
-    MOS_OP(0xC8, INY, MOS_AM_IMP,  2),
+    MOS_OP(0xE6, INC, MOS_AM_Z,    5, 2),
+    MOS_OP(0xF6, INC, MOS_AM_ZX,   6, 2),
+    MOS_OP(0xEE, INC, MOS_AM_ABS,  6, 3),
+    MOS_OP(0xFE, INC, MOS_AM_ABSX, 7, 3, MOS_CTRL_RW),
+    MOS_OP(0xE8, INX, MOS_AM_IMP,  2, 1),
+    MOS_OP(0xC8, INY, MOS_AM_IMP,  2, 1),
 
-    MOS_OP(0x69, ADC, MOS_AM_IMM,  2),
-    MOS_OP(0x65, ADC, MOS_AM_Z,    3),
-    MOS_OP(0x75, ADC, MOS_AM_ZX,   4),
-    MOS_OP(0x6D, ADC, MOS_AM_ABS,  4),
-    MOS_OP(0x7D, ADC, MOS_AM_ABSX, 4),
-    MOS_OP(0x79, ADC, MOS_AM_ABSY, 4),
-    MOS_OP(0x61, ADC, MOS_AM_INDX, 6),
-    MOS_OP(0x71, ADC, MOS_AM_INDY, 5),
+    MOS_OP(0x69, ADC, MOS_AM_IMM,  2, 2),
+    MOS_OP(0x65, ADC, MOS_AM_Z,    3, 2),
+    MOS_OP(0x75, ADC, MOS_AM_ZX,   4, 2),
+    MOS_OP(0x6D, ADC, MOS_AM_ABS,  4, 3),
+    MOS_OP(0x7D, ADC, MOS_AM_ABSX, 4, 3),
+    MOS_OP(0x79, ADC, MOS_AM_ABSY, 4, 3),
+    MOS_OP(0x61, ADC, MOS_AM_INDX, 6, 2),
+    MOS_OP(0x71, ADC, MOS_AM_INDY, 5, 2),
 
-    MOS_OP(0xE9, SBC, MOS_AM_IMM,  2),
-    MOS_OP(0xE5, SBC, MOS_AM_Z,    3),
-    MOS_OP(0xF5, SBC, MOS_AM_ZX,   4),
-    MOS_OP(0xED, SBC, MOS_AM_ABS,  4),
-    MOS_OP(0xFD, SBC, MOS_AM_ABSX, 4),
-    MOS_OP(0xF9, SBC, MOS_AM_ABSY, 4),
-    MOS_OP(0xE1, SBC, MOS_AM_INDX, 6),
-    MOS_OP(0xF1, SBC, MOS_AM_INDY, 5),
+    MOS_OP(0xE9, SBC, MOS_AM_IMM,  2, 2),
+    MOS_OP(0xE5, SBC, MOS_AM_Z,    3, 2),
+    MOS_OP(0xF5, SBC, MOS_AM_ZX,   4, 2),
+    MOS_OP(0xED, SBC, MOS_AM_ABS,  4, 3),
+    MOS_OP(0xFD, SBC, MOS_AM_ABSX, 4, 3),
+    MOS_OP(0xF9, SBC, MOS_AM_ABSY, 4, 3),
+    MOS_OP(0xE1, SBC, MOS_AM_INDX, 6, 2),
+    MOS_OP(0xF1, SBC, MOS_AM_INDY, 5, 2),
 
-    MOS_OP(0x29, AND, MOS_AM_IMM,  2),
-    MOS_OP(0x25, AND, MOS_AM_Z,    3),
-    MOS_OP(0x35, AND, MOS_AM_ZX,   4),
-    MOS_OP(0x2D, AND, MOS_AM_ABS,  4),
-    MOS_OP(0x3D, AND, MOS_AM_ABSX, 4),
-    MOS_OP(0x39, AND, MOS_AM_ABSY, 4),
-    MOS_OP(0x21, AND, MOS_AM_INDX, 6),
-    MOS_OP(0x31, AND, MOS_AM_INDY, 5),
+    MOS_OP(0x29, AND, MOS_AM_IMM,  2, 2),
+    MOS_OP(0x25, AND, MOS_AM_Z,    3, 2),
+    MOS_OP(0x35, AND, MOS_AM_ZX,   4, 2),
+    MOS_OP(0x2D, AND, MOS_AM_ABS,  4, 3),
+    MOS_OP(0x3D, AND, MOS_AM_ABSX, 4, 3),
+    MOS_OP(0x39, AND, MOS_AM_ABSY, 4, 3),
+    MOS_OP(0x21, AND, MOS_AM_INDX, 6, 2),
+    MOS_OP(0x31, AND, MOS_AM_INDY, 5, 2),
 
-    MOS_OP(0x49, EOR, MOS_AM_IMM,  2),
-    MOS_OP(0x45, EOR, MOS_AM_Z,    3),
-    MOS_OP(0x55, EOR, MOS_AM_ZX,   4),
-    MOS_OP(0x4D, EOR, MOS_AM_ABS,  4),
-    MOS_OP(0x5D, EOR, MOS_AM_ABSX, 4),
-    MOS_OP(0x59, EOR, MOS_AM_ABSY, 4),
-    MOS_OP(0x41, EOR, MOS_AM_INDX, 6),
-    MOS_OP(0x51, EOR, MOS_AM_INDY, 5),
+    MOS_OP(0x49, EOR, MOS_AM_IMM,  2, 2),
+    MOS_OP(0x45, EOR, MOS_AM_Z,    3, 2),
+    MOS_OP(0x55, EOR, MOS_AM_ZX,   4, 2),
+    MOS_OP(0x4D, EOR, MOS_AM_ABS,  4, 3),
+    MOS_OP(0x5D, EOR, MOS_AM_ABSX, 4, 3),
+    MOS_OP(0x59, EOR, MOS_AM_ABSY, 4, 3),
+    MOS_OP(0x41, EOR, MOS_AM_INDX, 6, 2),
+    MOS_OP(0x51, EOR, MOS_AM_INDY, 5, 2),
 
-    MOS_OP(0x09, ORA, MOS_AM_IMM,  2),
-    MOS_OP(0x05, ORA, MOS_AM_Z,    3),
-    MOS_OP(0x15, ORA, MOS_AM_ZX,   4),
-    MOS_OP(0x0D, ORA, MOS_AM_ABS,  4),
-    MOS_OP(0x1D, ORA, MOS_AM_ABSX, 4),
-    MOS_OP(0x19, ORA, MOS_AM_ABSY, 4),
-    MOS_OP(0x01, ORA, MOS_AM_INDX, 6),
-    MOS_OP(0x11, ORA, MOS_AM_INDY, 5),
+    MOS_OP(0x09, ORA, MOS_AM_IMM,  2, 2),
+    MOS_OP(0x05, ORA, MOS_AM_Z,    3, 2),
+    MOS_OP(0x15, ORA, MOS_AM_ZX,   4, 2),
+    MOS_OP(0x0D, ORA, MOS_AM_ABS,  4, 3),
+    MOS_OP(0x1D, ORA, MOS_AM_ABSX, 4, 3),
+    MOS_OP(0x19, ORA, MOS_AM_ABSY, 4, 3),
+    MOS_OP(0x01, ORA, MOS_AM_INDX, 6, 2),
+    MOS_OP(0x11, ORA, MOS_AM_INDY, 5, 2),
 
-    MOS_OP(0x0A, ASL, MOS_AM_IMP,  2),
-    MOS_OP(0x06, ASL, MOS_AM_Z,    5),
-    MOS_OP(0x16, ASL, MOS_AM_ZX,   6),
-    MOS_OP(0x0E, ASL, MOS_AM_ABS,  6),
-    MOS_OP(0x1E, ASL, MOS_AM_ABSX, 7, MOS_CTRL_RW),
+    MOS_OP(0x0A, ASL, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x06, ASL, MOS_AM_Z,    5, 2),
+    MOS_OP(0x16, ASL, MOS_AM_ZX,   6, 2),
+    MOS_OP(0x0E, ASL, MOS_AM_ABS,  6, 3),
+    MOS_OP(0x1E, ASL, MOS_AM_ABSX, 7, 3, MOS_CTRL_RW),
 
-    MOS_OP(0x4A, LSR, MOS_AM_IMP,  2),
-    MOS_OP(0x46, LSR, MOS_AM_Z,    5),
-    MOS_OP(0x56, LSR, MOS_AM_ZX,   6),
-    MOS_OP(0x4E, LSR, MOS_AM_ABS,  6),
-    MOS_OP(0x5E, LSR, MOS_AM_ABSX, 7, MOS_CTRL_RW),
+    MOS_OP(0x4A, LSR, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x46, LSR, MOS_AM_Z,    5, 2),
+    MOS_OP(0x56, LSR, MOS_AM_ZX,   6, 2),
+    MOS_OP(0x4E, LSR, MOS_AM_ABS,  6, 3),
+    MOS_OP(0x5E, LSR, MOS_AM_ABSX, 7, 3, MOS_CTRL_RW),
 
-    MOS_OP(0x2A, ROL, MOS_AM_IMP,  2),
-    MOS_OP(0x26, ROL, MOS_AM_Z,    5),
-    MOS_OP(0x36, ROL, MOS_AM_ZX,   6),
-    MOS_OP(0x2E, ROL, MOS_AM_ABS,  6),
-    MOS_OP(0x3E, ROL, MOS_AM_ABSX, 7, MOS_CTRL_RW),
+    MOS_OP(0x2A, ROL, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x26, ROL, MOS_AM_Z,    5, 2),
+    MOS_OP(0x36, ROL, MOS_AM_ZX,   6, 2),
+    MOS_OP(0x2E, ROL, MOS_AM_ABS,  6, 3),
+    MOS_OP(0x3E, ROL, MOS_AM_ABSX, 7, 3, MOS_CTRL_RW),
 
-    MOS_OP(0x6A, ROR, MOS_AM_IMP,  2),
-    MOS_OP(0x66, ROR, MOS_AM_Z,    5),
-    MOS_OP(0x76, ROR, MOS_AM_ZX,   6),
-    MOS_OP(0x6E, ROR, MOS_AM_ABS,  6),
-    MOS_OP(0x7E, ROR, MOS_AM_ABSX, 7, MOS_CTRL_RW),
+    MOS_OP(0x6A, ROR, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x66, ROR, MOS_AM_Z,    5, 2),
+    MOS_OP(0x76, ROR, MOS_AM_ZX,   6, 2),
+    MOS_OP(0x6E, ROR, MOS_AM_ABS,  6, 3),
+    MOS_OP(0x7E, ROR, MOS_AM_ABSX, 7, 3, MOS_CTRL_RW),
 
-    MOS_OP(0x18, CLC, MOS_AM_IMP,  2),
-    MOS_OP(0xD8, CLD, MOS_AM_IMP,  2),
-    MOS_OP(0x58, CLI, MOS_AM_IMP,  2),
-    MOS_OP(0xB8, CLV, MOS_AM_IMP,  2),
-    MOS_OP(0x38, SEC, MOS_AM_IMP,  2),
-    MOS_OP(0xF8, SED, MOS_AM_IMP,  2),
-    MOS_OP(0x78, SEI, MOS_AM_IMP,  2),
+    MOS_OP(0x18, CLC, MOS_AM_IMP,  2, 1),
+    MOS_OP(0xD8, CLD, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x58, CLI, MOS_AM_IMP,  2, 1),
+    MOS_OP(0xB8, CLV, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x38, SEC, MOS_AM_IMP,  2, 1),
+    MOS_OP(0xF8, SED, MOS_AM_IMP,  2, 1),
+    MOS_OP(0x78, SEI, MOS_AM_IMP,  2, 1),
 
-    MOS_OP(0x24, BIT, MOS_AM_Z,    3),
-    MOS_OP(0x2C, BIT, MOS_AM_ABS,  4),
+    MOS_OP(0x24, BIT, MOS_AM_Z,    3, 2),
+    MOS_OP(0x2C, BIT, MOS_AM_ABS,  4, 3),
 
-    MOS_OP(0xC9, CMP, MOS_AM_IMM,  2),
-    MOS_OP(0xC5, CMP, MOS_AM_Z,    3),
-    MOS_OP(0xD5, CMP, MOS_AM_ZX,   4),
-    MOS_OP(0xCD, CMP, MOS_AM_ABS,  4),
-    MOS_OP(0xDD, CMP, MOS_AM_ABSX, 4),
-    MOS_OP(0xD9, CMP, MOS_AM_ABSY, 4),
-    MOS_OP(0xC1, CMP, MOS_AM_INDX, 6),
-    MOS_OP(0xD1, CMP, MOS_AM_INDY, 5),
+    MOS_OP(0xC9, CMP, MOS_AM_IMM,  2, 2),
+    MOS_OP(0xC5, CMP, MOS_AM_Z,    3, 2),
+    MOS_OP(0xD5, CMP, MOS_AM_ZX,   4, 2),
+    MOS_OP(0xCD, CMP, MOS_AM_ABS,  4, 3),
+    MOS_OP(0xDD, CMP, MOS_AM_ABSX, 4, 3),
+    MOS_OP(0xD9, CMP, MOS_AM_ABSY, 4, 3),
+    MOS_OP(0xC1, CMP, MOS_AM_INDX, 6, 2),
+    MOS_OP(0xD1, CMP, MOS_AM_INDY, 5, 2),
 
-    MOS_OP(0xE0, CPX, MOS_AM_IMM,  2),
-    MOS_OP(0xE4, CPX, MOS_AM_Z,    3),
-    MOS_OP(0xEC, CPX, MOS_AM_ABS,  4),
+    MOS_OP(0xE0, CPX, MOS_AM_IMM,  2, 2),
+    MOS_OP(0xE4, CPX, MOS_AM_Z,    3, 2),
+    MOS_OP(0xEC, CPX, MOS_AM_ABS,  4, 3),
 
-    MOS_OP(0xC0, CPY, MOS_AM_IMM,  2),
-    MOS_OP(0xC4, CPY, MOS_AM_Z,    3),
-    MOS_OP(0xCC, CPY, MOS_AM_ABS,  4),
+    MOS_OP(0xC0, CPY, MOS_AM_IMM,  2, 2),
+    MOS_OP(0xC4, CPY, MOS_AM_Z,    3, 2),
+    MOS_OP(0xCC, CPY, MOS_AM_ABS,  4, 3),
 
-    MOS_OP(0x4C, JMP, MOS_AM_ABS,  3, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0x6C, JMP, MOS_AM_IND,  5, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0x20, JSR, MOS_AM_IMP,  6, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0x60, RTS, MOS_AM_IMP,  6, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x4C, JMP, MOS_AM_ABS,  3, 3, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x6C, JMP, MOS_AM_IND,  5, 3, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x20, JSR, MOS_AM_IMP,  6, 3, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x60, RTS, MOS_AM_IMP,  6, 1, MOS_CTRL_PC_ADDRESS_LATCH),
 
-    MOS_OP(0x90, BCC, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0xB0, BCS, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0xF0, BEQ, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0x30, BMI, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0xD0, BNE, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0x10, BPL, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0x50, BVC, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
-    MOS_OP(0x70, BVS, MOS_AM_IMP,  2, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x90, BCC, MOS_AM_IMP,  2, 2, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0xB0, BCS, MOS_AM_IMP,  2, 2, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0xF0, BEQ, MOS_AM_IMP,  2, 2, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x30, BMI, MOS_AM_IMP,  2, 2, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0xD0, BNE, MOS_AM_IMP,  2, 2, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x10, BPL, MOS_AM_IMP,  2, 2, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x50, BVC, MOS_AM_IMP,  2, 2, MOS_CTRL_PC_ADDRESS_LATCH),
+    MOS_OP(0x70, BVS, MOS_AM_IMP,  2, 2, MOS_CTRL_PC_ADDRESS_LATCH),
 };
 
 #ifdef EP_CONFIG_TEST
@@ -518,6 +417,7 @@ static void fetch_next_instr(struct mos6502_cpu* cpu)
     /* TODO: unimplemented instruction exception? */
     mos_word_t opcode = cpu_fetch(cpu, cpu->PC++);
     cpu->instr = mos_opcodes[opcode];
+    cpu->instr_cycle = 0;
     ep_trace("[%04lu] PC:%04hx fetch %02hhx %s", cpu->cycle, (mos_pa_t)(cpu->PC - 1), opcode, cpu->instr.mnemonic);
 }
 
@@ -598,15 +498,15 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
 
     switch (cpu->instr.mode) {
     case MOS_AM_IMM:
-        ep_assert(cpu->instr.cycle == 1);
+        ep_assert(cpu->instr_cycle == 1);
         latch_address(cpu, cpu->PC++);
         break;
     case MOS_AM_Z:
-        ep_assert(cpu->instr.cycle == 1);
+        ep_assert(cpu->instr_cycle == 1);
         latch_address(cpu, cpu_fetch(cpu, cpu->PC++));
         break;
     case MOS_AM_ZX:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
             cpu->eaddrh = 0;
@@ -622,7 +522,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_AM_ZY:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
             cpu->eaddrh = 0;
@@ -638,7 +538,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_AM_ABS:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
             break;
@@ -651,7 +551,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_AM_ABSX:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
             break;
@@ -673,7 +573,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_AM_ABSY:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             cpu->eaddrl = cpu_fetch(cpu, cpu->PC++);
             break;
@@ -695,7 +595,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_AM_INDX:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             /* Read zeropage offset */
             cpu->iaddrl = cpu_fetch(cpu, cpu->PC++);
@@ -717,7 +617,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_AM_INDY:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             /* Read zeropage offset */
             cpu->iaddrl = cpu_fetch(cpu, cpu->PC++);
@@ -744,7 +644,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_AM_IND:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             cpu->iaddrl = cpu_fetch(cpu, cpu->PC++);
             break;
@@ -821,7 +721,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         set_value_flags(cpu, cpu->A);
         break;
     case MOS_UOP_PHA:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             /* Discarded read at PC+1 */
             cpu_fetch_discard(cpu, cpu->PC);
@@ -834,7 +734,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         };
         break;
     case MOS_UOP_PLA:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             /* Discarded read at PC+1 */
             cpu_fetch_discard(cpu, cpu->PC);
@@ -852,7 +752,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         };
         break;
     case MOS_UOP_PHP:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             /* Discarded read at PC+1 */
             cpu_fetch_discard(cpu, cpu->PC);
@@ -865,7 +765,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         };
         break;
     case MOS_UOP_PLP:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             /* Discarded read at PC+1 */
             cpu_fetch_discard(cpu, cpu->PC);
@@ -882,7 +782,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         };
         break;
     case MOS_UOP_DEC:
-        switch (cpu->instr.ncycles - cpu->instr.cycle) {
+        switch (cpu->instr.ncycles - cpu->instr_cycle) {
         case 3:
             cpu->db = cpu_fetch(cpu, cpu->eaddr);
             break;
@@ -900,7 +800,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_UOP_INC:
-        switch (cpu->instr.ncycles - cpu->instr.cycle) {
+        switch (cpu->instr.ncycles - cpu->instr_cycle) {
         case 3:
             cpu->db = cpu_fetch(cpu, cpu->eaddr);
             break;
@@ -957,7 +857,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
             cpu->A <<= 1;
             set_value_flags(cpu, cpu->A);
         } else {
-            switch (cpu->instr.ncycles - cpu->instr.cycle) {
+            switch (cpu->instr.ncycles - cpu->instr_cycle) {
             case 3:
                 cpu->db = cpu_fetch(cpu, cpu->eaddr);
                 break;
@@ -982,7 +882,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
             cpu->A >>= 1;
             set_value_flags(cpu, cpu->A);
         } else {
-            switch (cpu->instr.ncycles - cpu->instr.cycle) {
+            switch (cpu->instr.ncycles - cpu->instr_cycle) {
             case 3:
                 cpu->db = cpu_fetch(cpu, cpu->eaddr);
                 break;
@@ -1009,7 +909,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
             set_value_flags(cpu, cpu->A);
         } else {
             bool carry;
-            switch (cpu->instr.ncycles - cpu->instr.cycle) {
+            switch (cpu->instr.ncycles - cpu->instr_cycle) {
             case 3:
                 cpu->db = cpu_fetch(cpu, cpu->eaddr);
                 break;
@@ -1037,7 +937,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
             set_value_flags(cpu, cpu->A);
         } else {
             bool carry;
-            switch (cpu->instr.ncycles - cpu->instr.cycle) {
+            switch (cpu->instr.ncycles - cpu->instr_cycle) {
             case 3:
                 cpu->db = cpu_fetch(cpu, cpu->eaddr);
                 break;
@@ -1097,7 +997,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
 
     #define MOS_EXEC_BR(_cond_) \
-        switch (cpu->instr.cycle) { \
+        switch (cpu->instr_cycle) { \
         case 1: \
             /* Fetch offset, increment PC, check condition, insert extra cycle if branch taken */ \
             cpu->db = cpu_fetch(cpu, cpu->PC++); \
@@ -1156,7 +1056,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         break;
     case MOS_UOP_JSR:
         /* JSR is not following ordinary ABS addressing mode, so it's hand-coded */
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             cpu->db = cpu_fetch(cpu, cpu->PC++);
             break;
@@ -1178,7 +1078,7 @@ static void uop_exec(struct mos6502_cpu* cpu)
         }
         break;
     case MOS_UOP_RTS:
-        switch (cpu->instr.cycle) {
+        switch (cpu->instr_cycle) {
         case 1:
             /* Discarded external read from PC + 1 */
             cpu_fetch_discard(cpu, cpu->PC);
@@ -1306,9 +1206,9 @@ void mos6502_tick(struct mos6502_cpu* cpu)
     }
 
     cpu->cycle++;
-    cpu->instr.cycle++;
+    cpu->instr_cycle++;
 
-    if (!cpu->halted && cpu->instr.cycle == cpu->instr.ncycles) {
+    if (!cpu->halted && cpu->instr_cycle == cpu->instr.ncycles) {
         ep_assert(cpu->tstate == MOS_TSTATE_UOP);
         retire_instr(cpu);
     }
@@ -1350,7 +1250,7 @@ uint64_t mos6502_cycles(struct mos6502_cpu* cpu)
 static mos_word_t test_ram[EP_TEST_RAM_SIZE];
 ep_static_assert((mos_pa_t)-1 < EP_TEST_RAM_SIZE);
 
-extern mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_pa_t paddr)
+mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_pa_t paddr)
 {
     (void)cpu;
 
