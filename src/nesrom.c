@@ -275,6 +275,33 @@ static void* nes_decode_paddr(paddr16_t paddr)
     return vaddr;
 }
 
+static bool disasm_opcode(mos_paddr_t pc, struct mos6502_instr* instr, uint16_t* operand)
+{
+    mos_word_t* pcode = nes_decode_paddr(pc);
+    if (!pcode) {
+        return false;
+    }
+
+    *instr = mos6502_get_instr(*pcode);
+    if (instr->uop == MOS_UOP_INVALID) {
+        return false;
+    }
+
+    ep_assert(instr->length <= 3);
+
+    *operand = 0;
+    for (size_t offset = 1; offset < instr->length; offset++) {
+        uint8_t* pop = nes_decode_paddr(pc + offset);
+        if (!pop) {
+            return false;
+        }
+
+        *operand |= (*pop) << ((offset - 1) * 8);
+    }
+
+    return true;
+}
+
 static bool nes_init_system(const char* romfile)
 {
     ep_assert(romfile);
@@ -320,12 +347,59 @@ static bool nes_init_system(const char* romfile)
 
 static void nes_run(void)
 {
-    ep_trace("nes_run");
-
     mos6502_reset(nes.cpu);
+    bool fetch_opcode = true;
 
     while (!mos6502_is_halted(nes.cpu)) {
-        mos6502_tick(nes.cpu);
+#ifdef EP_DEBUG
+        /* Disassemble the next instruction if CPU is fetching */
+        if (fetch_opcode) {
+            mos_paddr_t pc = mos6502_get_reg(nes.cpu, MOS_REG_PC).paddr;
+
+            struct mos6502_instr instr;
+            uint16_t operand;
+            if (!disasm_opcode(pc, &instr, &operand)) {
+                fprintf(stderr, "Bad opcode at 0x%04hx\n", pc);
+                break;
+            }
+
+            printf("0x%04hx:\t\t%s\t", pc, instr.mnemonic);
+            if (instr.length > 1) {
+                char* opfmt = NULL;
+                switch (instr.mode) {
+                case MOS_AM_IMP:    opfmt = ""; break;
+                case MOS_AM_IMM:    opfmt = "#%s"; break;
+                case MOS_AM_ABS:    opfmt = "%s"; break;
+                case MOS_AM_ABSX:   opfmt = "%s,X"; break;
+                case MOS_AM_ABSY:   opfmt = "%s,Y"; break;
+                case MOS_AM_Z:      opfmt = "%s"; break;
+                case MOS_AM_ZX:     opfmt = "%s,X"; break;
+                case MOS_AM_ZY:     opfmt = "%s,Y"; break;
+                case MOS_AM_IND:    opfmt = "(%s)"; break;
+                case MOS_AM_INDX:   opfmt = "(%s,X)"; break;
+                case MOS_AM_INDY:   opfmt = "(%s),Y"; break;
+                case MOS_AM_REL:    /* Relative jump is handled separately */ break;
+                default:            ep_assert(false); break;
+                };
+
+                if (instr.mode == MOS_AM_REL) {
+                    mos_paddr_t eaddr = pc + (int8_t)operand;
+                    printf("L%04hx", eaddr);
+                } else {
+                    char opbuf[16];
+                    if (instr.length == 2) {
+                        snprintf(opbuf, sizeof(opbuf), opfmt, "%02hhx");
+                    } else if (instr.length == 3) {
+                        snprintf(opbuf, sizeof(opbuf), opfmt, "%04hx");
+                    }
+                    printf(opbuf, operand);
+                }
+            }
+            printf("\n");
+        }
+#endif
+        /* Advance the cpu 1 cycle */
+        fetch_opcode = mos6502_tick(nes.cpu);
     }
 }
 

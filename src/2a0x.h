@@ -13,6 +13,7 @@ typedef uint16_t mos_paddr_t;
 /* MOS 6502 Micro-operations */
 enum mos6502_uop
 {
+    MOS_UOP_INVALID = 0,
     MOS_UOP_NOP,
     MOS_UOP_HLT,
     MOS_UOP_LDA,
@@ -87,6 +88,24 @@ enum mos6502_addr_mode
     MOS_AM_REL,
 };
 
+/* Architectural register names */
+enum mos6502_reg_name
+{
+    MOS_REG_A,
+    MOS_REG_X,
+    MOS_REG_Y,
+    MOS_REG_P,
+    MOS_REG_SP,
+    MOS_REG_PC,
+};
+
+/* Register value */
+union mos6502_reg
+{
+    mos_word_t word;
+    mos_paddr_t paddr;
+};
+
 struct mos6502_instr
 {
     /* Human-friendly mnemonic */
@@ -99,11 +118,11 @@ struct mos6502_instr
     uint8_t mode;
 
     /* Instruction length in bytes including operand */
-    uint8_t length;
+    uint8_t length:2;
 
     /* Total cycles this instruction takes to execute.
        Note that this is a default and might be adjusted when we run the uop. */
-    uint8_t ncycles;
+    uint8_t ncycles:6;
 
     /* Latch address to PC register instead of an internal address latch */
     #define MOS_CTRL_PC_ADDRESS_LATCH (1u << 0)
@@ -114,6 +133,7 @@ struct mos6502_instr
     /* Control logic bits */
     uint8_t ctrlbits;
 };
+ep_static_assert(sizeof(struct mos6502_instr) <= sizeof(uint64_t));
 
 struct mos6502_cpu;
 
@@ -126,8 +146,11 @@ void mos6502_init(struct mos6502_cpu* cpu);
 /* Resets the CPU state */
 void mos6502_reset(struct mos6502_cpu* cpu);
 
-/* Executes one CPU clock tick */
-void mos6502_tick(struct mos6502_cpu* cpu);
+/*
+ * Executes one CPU clock tick.
+ * Return true when current instruction is retired.
+ */
+bool mos6502_tick(struct mos6502_cpu* cpu);
 
 /* Checks if CPU is halted */
 bool mos6502_is_halted(struct mos6502_cpu* cpu);
@@ -139,7 +162,10 @@ uint64_t mos6502_total_retired(struct mos6502_cpu* cpu);
 uint64_t mos6502_cycles(struct mos6502_cpu* cpu);
 
 /* Retrieves instruction definition for a given opcode */
-const struct mos6502_instr* mos6502_get_instr(uint8_t opcode);
+struct mos6502_instr mos6502_get_instr(uint8_t opcode);
+
+/* Retrieves a register value */
+union mos6502_reg mos6502_get_reg(struct mos6502_cpu* cpu, enum mos6502_reg_name name);
 
 /*
  * Implemented by the system-level emulator when linking with us.

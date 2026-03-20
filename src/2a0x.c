@@ -417,7 +417,6 @@ static void fetch_next_instr(struct mos6502_cpu* cpu)
     mos_word_t opcode = cpu_fetch(cpu, cpu->PC++);
     cpu->instr = mos_opcodes[opcode];
     cpu->instr_cycle = 0;
-    ep_trace("[%04lu] PC:%04hx fetch %02hhx %s", cpu->cycle, (mos_pa_t)(cpu->PC - 1), opcode, cpu->instr.mnemonic);
 }
 
 static inline void latch_address(struct mos6502_cpu* cpu, mos_paddr_t addr)
@@ -1161,12 +1160,12 @@ void mos6502_push_word(struct mos6502_cpu* cpu, mos_word_t val)
     push_word(cpu, val);
 }
 
-void mos6502_tick(struct mos6502_cpu* cpu)
+bool mos6502_tick(struct mos6502_cpu* cpu)
 {
     ep_verify(cpu != NULL);
 
     if (cpu->halted) {
-        return;
+        return false;
     }
 
     switch (cpu->tstate) {
@@ -1210,7 +1209,10 @@ void mos6502_tick(struct mos6502_cpu* cpu)
     if (!cpu->halted && cpu->instr_cycle == cpu->instr.ncycles) {
         ep_assert(cpu->tstate == MOS_TSTATE_UOP);
         retire_instr(cpu);
+        return true;
     }
+
+    return false;
 }
 
 bool mos6502_is_halted(struct mos6502_cpu* cpu)
@@ -1229,6 +1231,31 @@ uint64_t mos6502_cycles(struct mos6502_cpu* cpu)
 {
     ep_verify(cpu != NULL);
     return cpu->cycle;
+}
+
+struct mos6502_instr mos6502_get_instr(uint8_t opcode)
+{
+    return mos_opcodes[opcode];
+}
+
+union mos6502_reg mos6502_get_reg(struct mos6502_cpu* cpu, enum mos6502_reg_name name)
+{
+    ep_verify(cpu);
+
+    union mos6502_reg val = {0};
+    switch (name) {
+    case MOS_REG_A: val.word = cpu->A; break;
+    case MOS_REG_X: val.word = cpu->X; break;
+    case MOS_REG_Y: val.word = cpu->Y; break;
+    case MOS_REG_P: val.word = cpu->P; break;
+    case MOS_REG_SP: val.word = cpu->SP; break;
+    case MOS_REG_PC: val.paddr = cpu->PC; break;
+    default:
+        ep_assert(false);
+        break;
+    }
+
+    return val;
 }
 
 /*
