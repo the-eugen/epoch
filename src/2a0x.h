@@ -8,7 +8,7 @@
 #include <stdbool.h>
 
 typedef uint8_t  mos_word_t;
-typedef uint16_t mos_pa_t;
+typedef uint16_t mos_paddr_t;
 
 /* MOS 6502 Micro-operations */
 enum mos6502_uop
@@ -146,4 +146,4 @@ const struct mos6502_instr* mos6502_get_instr(uint8_t opcode);
  * Decoded accesses can be read or write but are always word-sized.
  * Return NULL for unmapped access and expect the most recent tick to fail.
  */
-extern mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_pa_t paddr);
+extern mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_paddr_t paddr);

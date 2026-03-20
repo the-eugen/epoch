@@ -18,11 +18,10 @@ enum mos6502_tstate
     MOS_TSTATE_UOP,
 };
 
-
 struct mos6502_bus_trace
 {
     uint64_t cycle;
-    mos_pa_t addr;
+    mos_paddr_t addr;
     union {
         uint8_t as_u8;
         struct {
@@ -36,7 +35,7 @@ struct mos6502_bus_trace
 struct mos6502_cpu
 {
     union {
-        mos_pa_t PC;
+        mos_paddr_t PC;
         struct {
             mos_word_t PCL;
             mos_word_t PCH;
@@ -58,7 +57,7 @@ struct mos6502_cpu
 
     /* Internal register for effective address storage */
     union {
-        mos_pa_t eaddr;
+        mos_paddr_t eaddr;
         struct {
             mos_word_t eaddrl;
             mos_word_t eaddrh;
@@ -67,7 +66,7 @@ struct mos6502_cpu
 
     /* Internal register for indirect address for ops that use it */
     union {
-        mos_pa_t iaddr;
+        mos_paddr_t iaddr;
         struct {
             mos_word_t iaddrl;
             mos_word_t iaddrh;
@@ -313,7 +312,7 @@ static void reset_bus_trace(struct mos6502_cpu* cpu)
     cpu->bus_trace_head = 0;
 }
 
-static void record_bus_trace(struct mos6502_cpu* cpu, mos_pa_t addr, bool rw, bool discard)
+static void record_bus_trace(struct mos6502_cpu* cpu, mos_paddr_t addr, bool rw, bool discard)
 {
     // Writes can't be discarded
     ep_assert(!rw || !discard);
@@ -336,7 +335,7 @@ static inline void reset_bus_trace(struct mos6502_cpu* cpu)
     (void) cpu;
 }
 
-static inline void record_bus_trace(struct mos6502_cpu* cpu, mos_pa_t addr, bool rw, bool discard)
+static inline void record_bus_trace(struct mos6502_cpu* cpu, mos_paddr_t addr, bool rw, bool discard)
 {
     (void) cpu;
     (void) addr;
@@ -346,7 +345,7 @@ static inline void record_bus_trace(struct mos6502_cpu* cpu, mos_pa_t addr, bool
 
 #endif
 
-static mos_word_t fetch_word(struct mos6502_cpu* cpu, mos_pa_t pa)
+static mos_word_t fetch_word(struct mos6502_cpu* cpu, mos_paddr_t pa)
 {
     /* TODO: Handle unmapped addresses */
     mos_word_t* vaddr = mos6502_decode_paddr(cpu, pa);
@@ -355,7 +354,7 @@ static mos_word_t fetch_word(struct mos6502_cpu* cpu, mos_pa_t pa)
     return *vaddr;
 }
 
-static void store_word(struct mos6502_cpu* cpu, mos_pa_t pa, mos_word_t val)
+static void store_word(struct mos6502_cpu* cpu, mos_paddr_t pa, mos_word_t val)
 {
     /* TODO: Handle unmapped addresses */
     mos_word_t* vaddr = mos6502_decode_paddr(cpu, pa);
@@ -382,19 +381,19 @@ static mos_word_t pop_word(struct mos6502_cpu* cpu)
     return fetch_word(cpu, 0x0100 | cpu->SP);
 }
 
-static inline mos_word_t cpu_fetch(struct mos6502_cpu* cpu, mos_pa_t pa)
+static inline mos_word_t cpu_fetch(struct mos6502_cpu* cpu, mos_paddr_t pa)
 {
     record_bus_trace(cpu, pa, false, false);
     return fetch_word(cpu, pa);
 }
 
-static inline void cpu_fetch_discard(struct mos6502_cpu* cpu, mos_pa_t pa)
+static inline void cpu_fetch_discard(struct mos6502_cpu* cpu, mos_paddr_t pa)
 {
     record_bus_trace(cpu, pa, false, true);
     (void) fetch_word(cpu, pa);
 }
 
-static void cpu_store(struct mos6502_cpu* cpu, mos_pa_t pa, mos_word_t val)
+static void cpu_store(struct mos6502_cpu* cpu, mos_paddr_t pa, mos_word_t val)
 {
     record_bus_trace(cpu, pa, true, false);
     store_word(cpu, pa, val);
@@ -421,7 +420,7 @@ static void fetch_next_instr(struct mos6502_cpu* cpu)
     ep_trace("[%04lu] PC:%04hx fetch %02hhx %s", cpu->cycle, (mos_pa_t)(cpu->PC - 1), opcode, cpu->instr.mnemonic);
 }
 
-static inline void latch_address(struct mos6502_cpu* cpu, mos_pa_t addr)
+static inline void latch_address(struct mos6502_cpu* cpu, mos_paddr_t addr)
 {
     if (cpu->instr.ctrlbits & MOS_CTRL_PC_ADDRESS_LATCH) {
         cpu->PC = addr;
@@ -470,12 +469,12 @@ static mos_word_t exec_adda3(struct mos6502_cpu* cpu, mos_word_t val1, mos_word_
     return res;
 }
 
-static inline bool is_xpage_ref(mos_pa_t base, uint8_t offset)
+static inline bool is_xpage_ref(mos_paddr_t base, uint8_t offset)
 {
     return (~base & 0xFF) < offset;
 }
 
-static inline bool should_stall(struct mos6502_cpu *cpu, mos_pa_t base, uint8_t offset)
+static inline bool should_stall(struct mos6502_cpu *cpu, mos_paddr_t base, uint8_t offset)
 {
     /* rw control signal tells us to delay by 1 cycle unconditionally */
     if (cpu->instr.ctrlbits & MOS_CTRL_RW) {
@@ -564,7 +563,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         case 3:
             /* Discarded read from HH:(LL+X) on delay cycle */
             if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
-                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->X) & 0xFF));
+                cpu_fetch_discard(cpu, ((mos_paddr_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->X) & 0xFF));
             }
             latch_address(cpu, cpu->eaddr + cpu->X);
             break;
@@ -586,7 +585,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         case 3:
             /* Discarded read from HH:(LL+Y) on delay cycle */
             if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
-                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->Y) & 0xFF));
+                cpu_fetch_discard(cpu, ((mos_paddr_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->Y) & 0xFF));
             }
             latch_address(cpu, cpu->eaddr + cpu->Y);
             break;
@@ -635,7 +634,7 @@ static void addr_mode_exec(struct mos6502_cpu* cpu)
         case 4:
             /* Discarded read from HH:(LL+Y) on delay cycle */
             if (cpu->instr.ctrlbits & MOS_CTRL_XPAGE_DELAY || cpu->instr.ctrlbits & MOS_CTRL_RW) {
-                cpu_fetch_discard(cpu, ((mos_pa_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->Y) & 0xFF));
+                cpu_fetch_discard(cpu, ((mos_paddr_t)cpu->eaddrh << 8) | ((cpu->eaddrl + cpu->Y) & 0xFF));
             }
             latch_address(cpu, cpu->eaddr + cpu->Y);
             break;
@@ -1125,7 +1124,7 @@ void mos6502_reset(struct mos6502_cpu* cpu)
     ep_verify(cpu != NULL);
 
     /* A, X, Y survive reset */
-    cpu->PC = (mos_pa_t)(cpu_fetch(cpu, 0xfffd) << 8) | cpu_fetch(cpu, 0xfffc);
+    cpu->PC = (mos_paddr_t)(cpu_fetch(cpu, 0xfffd) << 8) | cpu_fetch(cpu, 0xfffc);
     cpu->SP = 0xfd;
     cpu->P = SR_I | SR_U;
     cpu->halted = false;
@@ -1138,13 +1137,13 @@ void mos6502_reset(struct mos6502_cpu* cpu)
     reset_bus_trace(cpu);
 }
 
-mos_word_t mos6502_load_word(struct mos6502_cpu* cpu, mos_pa_t addr)
+mos_word_t mos6502_load_word(struct mos6502_cpu* cpu, mos_paddr_t addr)
 {
     ep_verify(cpu);
     return fetch_word(cpu, addr);
 }
 
-void mos6502_store_word(struct mos6502_cpu* cpu, mos_pa_t addr, mos_word_t val)
+void mos6502_store_word(struct mos6502_cpu* cpu, mos_paddr_t addr, mos_word_t val)
 {
     ep_verify(cpu);
     store_word(cpu, addr, val);
@@ -1248,9 +1247,9 @@ uint64_t mos6502_cycles(struct mos6502_cpu* cpu)
 #define EP_TEST_RAM_SIZE 0x10000
 
 static mos_word_t test_ram[EP_TEST_RAM_SIZE];
-ep_static_assert((mos_pa_t)-1 < EP_TEST_RAM_SIZE);
+ep_static_assert((mos_paddr_t)-1 < EP_TEST_RAM_SIZE);
 
-mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_pa_t paddr)
+mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_paddr_t paddr)
 {
     (void)cpu;
 

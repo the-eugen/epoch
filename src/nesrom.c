@@ -172,7 +172,7 @@ bad_rom:
     return false;
 }
 
-typedef mos_pa_t paddr16_t;
+typedef mos_paddr_t paddr16_t;
 
 enum nes_cpu_segment_type
 {
@@ -331,7 +331,7 @@ static void nes_run(void)
 
 #if !defined(EP_CONFIG_TEST)
 
-mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_pa_t paddr)
+mos_word_t* mos6502_decode_paddr(struct mos6502_cpu* cpu, mos_paddr_t paddr)
 {
     (void)cpu;
     return nes_decode_paddr(paddr);
